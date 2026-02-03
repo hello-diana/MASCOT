@@ -1,0 +1,203 @@
+############################################
+# Project-specific scripts & artifacts
+############################################
+
+# Experiment scripts (local only)
+run*.sh
+
+train*.sh
+
+# Logs, outputs, results
+wandb/
+ckpt/
+output/
+outputs
+results
+results_llama/
+results_qwen/
+
+# Data & datasets
+dataset
+datasets*
+
+data/process.py
+8k_math_72k_numina.jsonl
+8k_math_78_answers.json
+
+# Model / config secrets
+model_api_configs/model_api_config.json
+
+# Explicit no-push markers
+*nopush*
+
+############################################
+# Common data / artifact formats
+############################################
+
+*.jsonl
+*.xlsx
+*.pt
+
+############################################
+# Python bytecode & caches
+############################################
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+############################################
+# C / C++ / Python extensions
+############################################
+
+*.so
+
+############################################
+# Build / packaging artifacts
+############################################
+
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+############################################
+# PyInstaller
+############################################
+
+*.manifest
+*.spec
+
+############################################
+# Test / coverage artifacts
+############################################
+
+.coverage
+.coverage.*
+.cache
+.cover/
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.tox/
+.nox/
+.hypothesis/
+.pytest_cache/
+
+############################################
+# Jupyter / IPython
+############################################
+
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+############################################
+# Documentation builds
+############################################
+
+docs/_build/
+docs/.build/
+site/
+
+############################################
+# Virtual environments
+############################################
+
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+############################################
+# Dependency managers
+############################################
+
+# pipenv / poetry / pdm
+.pdm.toml
+.pdm-python
+.pdm-build/
+__pypackages__/
+
+############################################
+# Framework / tool specific
+############################################
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask
+instance/
+.webassets-cache/
+
+# Scrapy
+.scrapy/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath
+*.sage.py
+
+############################################
+# Type checkers
+############################################
+
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+############################################
+# IDEs & editors
+############################################
+
+.idea/
+.vscode/
+.spyderproject
+.spyproject
+.ropeproject
+
+############################################
+# OS / filesystem
+############################################
+
+.DS_Store
+.nfs*
+
+############################################
+# Model checkpoints / experiments
+############################################
+
+core/
+*/ckpt/*
+*/checkpoint/*
+*test_scripts*
+*jianh*
+thoughts.md

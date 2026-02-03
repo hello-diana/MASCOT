@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="description"
+        content="MASCOT: Towards Multi-Agent Socio-Collaborative Companion Systems">
+  <meta name="keywords" content="MASCOT, Multi-Agent Systems, Social Companions, LLM, Persona Fidelity, Collaborative AI">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MASCOT: Towards Multi-Agent Socio-Collaborative Companion Systems</title>
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro"
+        rel="stylesheet">
+
+  <link rel="stylesheet" href="./media/static/css/bulma.min.css">
+  <link rel="stylesheet" href="./media/static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./media/static/css/bulma-slider.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link rel="stylesheet" href="./media/static/css/index.css">
+  <link rel="icon" href="./media/static/images/icon_v3.png">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/js/all.min.js"></script>
+  <script src="./media/static/js/bulma-carousel.min.js"></script>
+  <script src="./media/static/js/bulma-slider.min.js"></script>
+  <script src="./media/static/js/index.js"></script>
+
+  <style>
+    /* Three image containers (use 25% for four, and 50% for two, etc) */
+    .imgcolumn {
+      float: left;
+      width: 50%;
+      padding: 10px
+    }
+
+    /* Clear floats after image containers */
+    .imgrow::after {
+      content: "";
+      clear: both;
+      display: table;
+    }
+
+    table.customTable {
+      width: 80%;
+      background-color: #FFFFFF;
+      border-collapse: collapse;
+      border-width: 2px;
+      border-color: rgb(214, 236, 244);
+      border-style: solid;
+      color: #000000;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    table.customTable td {
+      border-width: 2px;
+      border-color: rgb(214, 236, 244);
+      border-style: solid;
+      padding: 5px;
+      text-align: center;
+      vertical-align: middle;
+    }
+
+    table.customTable th {
+      border-width: 2px;
+      border-color: rgb(214, 236, 244);
+      border-style: solid;
+      padding: 5px;
+    }
+
+    table.customTable thead {
+      background-color: rgb(214, 236, 244);
+    }
+
+    .example-image {
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+      max-width: 100%;
+      height: auto;
+    }
+
+    .feature-card {
+      background: white;
+      border: 3px solid;
+      border-image: linear-gradient(135deg, #667eea 0%, #764ba2 100%) 1;
+      border-radius: 15px;
+      padding: 30px 20px;
+      text-align: center;
+      color: #333;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+      transition: all 0.3s ease;
+      height: 100%;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 15px 40px rgba(102, 126, 234, 0.3);
+    }
+
+    .feature-icon {
+      font-size: 3rem;
+      margin-bottom: 20px;
+      display: block;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .methodology-step {
+      background: white;
+      border-left: 5px solid #667eea;
+      padding: 25px;
+      margin: 20px 0;
+      border-radius: 0 10px 10px 0;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+    }
+
+    .metric-card {
+      background: white;
+      border: 3px solid;
+      border-image: linear-gradient(45deg, #11998e 0%, #38ef7d 100%) 1;
+      color: #333;
+      padding: 20px;
+      border-radius: 10px;
+      text-align: center;
+      margin: 10px 0;
+      transition: all 0.3s ease;
+    }
+
+    .metric-card:hover {
+      box-shadow: 0 10px 25px rgba(17, 153, 142, 0.3);
+      transform: translateY(-3px);
+    }
+
+    .metric-number {
+      font-size: 2.5rem;
+      font-weight: bold;
+      display: block;
+      background: linear-gradient(45deg, #11998e 0%, #38ef7d 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .metric-label {
+      font-size: 0.9rem;
+      color: #666;
+    }
+
+    .highlight-box {
+      background: white;
+      border: 3px solid;
+      border-image: linear-gradient(135deg, #667eea 0%, #764ba2 100%) 1;
+      color: #333;
+      padding: 20px;
+      border-radius: 10px;
+      margin: 20px 0;
+      text-align: center;
+      transition: all 0.3s ease;
+    }
+
+    .highlight-box:hover {
+      box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+    }
+
+    .highlight-box h4 {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .agent-card {
+      background: #f8f9ff;
+      border: 2px solid #e0e7ff;
+      border-radius: 10px;
+      padding: 20px;
+      margin: 15px 0;
+      transition: all 0.3s ease;
+    }
+
+    .agent-card:hover {
+      border-color: #667eea;
+      transform: scale(1.02);
+    }
+
+    .challenge-card {
+      background: #fff5f5;
+      border: 2px solid #fed7d7;
+      border-radius: 10px;
+      padding: 20px;
+      margin: 15px 0;
+      transition: all 0.3s ease;
+    }
+
+    .challenge-card:hover {
+      border-color: #f56565;
+      transform: scale(1.02);
+    }
+
+    .dataset-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin: 20px 0;
+    }
+
+    .dataset-card {
+      background: #f8f9ff;
+      border: 2px solid #e0e7ff;
+      border-radius: 10px;
+      padding: 15px;
+      text-align: center;
+      transition: all 0.3s ease;
+    }
+
+    .dataset-card:hover {
+      border-color: #667eea;
+      transform: scale(1.02);
+    }
+
+    .dataset-description {
+      margin: 15px 0;
+      line-height: 1.6;
+      text-align: justify;
+    }
+
+    .teaser-image {
+      max-width: 80%;
+      margin: 20px auto;
+      display: block;
+    }
+
+    .section {
+      padding: 3rem 1.5rem;
+    }
+
+    .section .title.is-3 {
+      margin-bottom: 1.5rem;
+    }
+
+    .hero {
+      background: linear-gradient(180deg, #ffffff 0%, #f8f9ff 100%);
+    }
+
+    .placeholder-box {
+      background: #f0f0f0;
+      border: 2px dashed #ccc;
+      border-radius: 10px;
+      padding: 40px 20px;
+      text-align: center;
+      color: #666;
+      margin: 20px 0;
+    }
+
+    .placeholder-box strong {
+      color: #999;
+    }
+
+    @media screen and (max-width: 768px) {
+      table.customTable {
+        width: 100%;
+      }
+
+      .feature-card {
+        margin-bottom: 20px;
+      }
+
+      .metric-card {
+        margin-bottom: 15px;
+      }
+
+      .title-container {
+        gap: 12px !important;
+      }
+
+      .title-icon {
+        height: 60px !important;
+      }
+
+      .title-text {
+        font-size: 1.5rem !important;
+        line-height: 1.3 !important;
+      }
+
+      .logo-container {
+        flex-direction: column !important;
+        gap: 20px !important;
+      }
+
+      .affiliation-logo {
+        height: 45px !important;
+        max-width: 80%;
+      }
+    }
+    </style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column">
+          <div class="title-container" style="display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 20px;">
+            <img src="./media/static/images/icon_v3.png" alt="MASCOT Icon" class="title-icon" style="height: 150px; width: auto; flex-shrink: 0;">
+            <h1 class="title is-1 publication-title" style="text-align: left; margin: 0;">
+              MASCOT: Towards Multi-Agent Socio-Collaborative Companion Systems
+            </h1>
+          </div>
+          <div class="is-size-5 publication-authors" style="text-align: center;">
+            <span class="author-block">
+              <a href="https://hello-diana.github.io/">Yiyang Wang</a><sup>1</sup>,</span>
+            <span class="author-block">
+              <a href="https://ahren09.github.io/">Yiqiao Jin</a><sup>1</sup>,</span>
+            <span class="author-block">
+              <a href="https://a-cabral.github.io/">Alex Cabral</a><sup>1</sup>,</span>
+            <span class="author-block">
+              <a href="https://josiahhester.com/">Josiah Hester</a><sup>1</sup>
+            </span>
+          </div>
+
+          <div class="is-size-5 publication-authors" style="text-align: center;">
+            <span class="author-block"><sup>1</sup>Georgia Institute of Technology</span>
+          </div>
+
+          <div class="column has-text-centered" style="padding-top: 20px;">
+            <div class="logo-container" style="display: flex; justify-content: center; align-items: center; gap: 40px; margin-bottom: 20px;">
+              <img src="./media/static/images/GeorgiaTech.png" alt="Georgia Institute of Technology" class="affiliation-logo" style="height: 60px; width: auto;">
+            </div>
+          </div>
+
+          <div class="column has-text-centered" style="padding-top: 20px;">
+            <div class="publication-links">
+              <!-- PDF Link. -->
+              <span class="link-block">
+                <a href="https://arxiv.org/abs/2601.14230"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fas fa-file-pdf"></i>
+                  </span>
+                  <span>Paper</span>
+                </a>
+              </span>
+              <!-- Code Link. -->
+              <span class="link-block">
+                <a href="#"
+                   class="external-link button is-normal is-rounded is-dark" style="pointer-events: none; opacity: 0.6;">
+                  <span class="icon">
+                      <i class="fab fa-github"></i>
+                  </span>
+                  <span>Code (Coming Soon)</span>
+                </a>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <!-- Abstract. -->
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3">Abstract</h2>
+        <div class="content has-text-justified">
+          <p>
+            Social interaction significantly impacts well-being, mental health, and cognition. Yet an estimated 1 in 6 people worldwide lack the social interactions they need, creating crises of social isolation and loneliness. As large language models (LLMs) integrate deeper into human lives, their role is shifting from passive <em>tools</em> to active <strong>socio-collaborative companions</strong> in affective and collaborative settings.
+          </p>
+          <p>
+            We propose <strong>MASCOT</strong>, a generalizable multi-agent framework for developing <em>multi-perspective socio-collaborative companions</em>. Unlike previous multi-agent systems optimized solely for task efficiency, MASCOT targets user-agent interaction quality, explicitly balancing individual agent persona consistency with global discourse dynamics. We introduce an efficient bi-level optimization strategy: (1) a Reinforcement-Learning-from-AI-Feedback (RLAIF) pipeline that fine-tunes individual agents for strict <em>Persona Fidelity</em>, and (2) a meta-agent policy guided by group-level rewards to ensure <em>Interaction Synergy</em>.
+          </p>
+          <p>
+            Extensive experiments demonstrate that MASCOT achieves significant improvements: <strong>+14.1</strong> in Persona Consistency and <strong>+10.6</strong> in Social Contribution compared to baseline approaches.
+          </p>
+        </div>
+      </div>
+    </div>
+    <!--/ Abstract. -->
+  </div>
+</section>
+
+<!-- Teaser Figure -->
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column">
+        <div class="content">
+          <h2 class="title is-3">Motivation</h2>
+          <img src="./media/figures/teaser.jpg" alt="Teaser" class="teaser-image">
+          <p class="has-text-centered">
+            Moving beyond dyadic interactions to multi-agent socio-collaborative companion systems. While single-agent support systems (left) can result in limited insights and echo chambers, multi-agent systems (right) provide diverse, balanced perspectives and foster a shared sense of community through agents with distinct roles.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column">
+        <div class="content">
+          <h2 class="title is-3">Challenges in Multi-Agent Social Companions</h2>
+
+          <div class="methodology-step">
+            <h4 class="title is-4">1. 🎭 Persona Fidelity</h4>
+            <p>At the individual agent level, models struggle to maintain stable, unique character traits. Agents often succumb to 🫥 <em>persona collapse</em>, regressing to 🔁 generic, homogenized assistant behaviors that lack unique perspectives required for their specific roles.</p>
+          </div>
+
+          <div class="methodology-step">
+            <h4 class="title is-4">2. 🤝 Interaction Synergy</h4>
+            <p>At the collective level, uncoordinated agents fail to generate complementary, non-redundant contributions. This manifests as <em>Social Sycophancy</em> (the 👍 "Yes-Man" Bias), where agents prioritize agreeableness, creating 🔄 echo chambers rather than constructive conversations.</p>
+          </div>
+
+          <div class="methodology-step">
+            <h4 class="title is-4">3. 🧭 Long-Horizon State Consistency</h4>
+            <p>Agents often struggle to track the logical progression of a conversation, treating each turn as a local optimization problem and losing track of the conversation's 📉 logical arc, such as 🔂 re-litigating settled topics.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column">
+        <div class="content">
+          <h2 class="title is-3">MASCOT Framework</h2>
+          <p>MASCOT is a multi-agent framework that optimizes the generation process through a two-phase training pipeline: (1) <strong>Persona-Aware Behavioral Alignment</strong> and (2) <strong>Collaborative Dialogue Optimization</strong>.</p>
+
+          <img src="./media/figures/system.jpg" alt="System" class="system-image">
+          <p class="has-text-centered" style="margin-top: 10px;">
+            <em>MASCOT optimizes multi-agent socio-collaborative companions through bi-level optimization: individual persona alignment and group dynamics coordination.</em>
+          </p>
+        </div>
+      </div>
+    </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column">
+        <div class="content">
+          <h2 class="title is-3">Two-Stage Pipeline</h2>
+
+          <div class="methodology-step">
+            <h4 class="title is-4">Stage 1: Persona-Aware Behavioral Alignment</h4>
+            <p>We move beyond standard few-shot prompting by explicitly aligning a base policy with persona constraints via Reinforcement Learning from AI Feedback (RLAIF).</p>
+
+            <div class="agent-card">
+              <h5><strong>Persona Reward Modeling</strong></h5>
+              <p>Each candidate response is evaluated by an LLM judge according to evaluation criteria including persona adherence and contextual appropriateness. We construct preference pairs and train a persona-aware reward model.</p>
+            </div>
+
+            <div class="agent-card">
+              <h5><strong>RL Fine-tuning with GRPO</strong></h5>
+              <p>We optimize a composite reward function combining persona adherence and format rewards, using Group Relative Policy Optimization (GRPO) for computational efficiency.</p>
+            </div>
+          </div>
+
+          <div class="methodology-step">
+            <h4 class="title is-4">Stage 2: Collaborative Dialogue Optimization</h4>
+            <p style="margin-bottom: 20px;">While Stage 1 optimizes individual agents for persona adherence, it does not account for group dynamics. We introduce group-level optimization to ensure cohesive community conversations.</p>
+
+            <div class="agent-card">
+              <h5><strong>Hierarchical Generation Process</strong></h5>
+              <p>At each turn, a meta-agent generates directives specifying the next speaker with specific instructions, then the selected agent generates a response conditioned on its persona and the directive.</p>
+            </div>
+
+            <div class="agent-card">
+              <h5><strong>Group Reward Modeling</strong></h5>
+              <p>The Group Reward Model evaluates entire N-turn conversation blocks based on holistic criteria including global state consistency and interaction quality.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column">
+        <div class="content">
+          <h2 class="title is-3">Key Contributions</h2>
+          <div class="columns">
+            <div class="column is-one-third">
+              <div class="feature-card">
+                <i class="fas fa-users feature-icon"></i>
+                <h4 class="title is-4">Unified Framework</h4>
+                <p>A generalizable multi-agent framework that enables socio-collaborative companions in multi-perspective group conversations</p>
+              </div>
+            </div>
+            <div class="column is-one-third">
+              <div class="feature-card">
+                <i class="fas fa-layer-group feature-icon"></i>
+                <h4 class="title is-4">Bi-level Optimization</h4>
+                <p>Low-resource, multi-level optimization pipeline that harmonizes individual persona adherence with collective interaction synergy</p>
+              </div>
+            </div>
+            <div class="column is-one-third">
+              <div class="feature-card">
+                <i class="fas fa-chart-line feature-icon"></i>
+                <h4 class="title is-4">Extensive Evaluation</h4>
+                <p>Comprehensive evaluation across psychology (empathetic conversations) and workplace settings (business and academic meetings)</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column">
+        <div class="content">
+          <h2 class="title is-3">Performance Results</h2>
+          <p>MASCOT consistently outperforms strong baselines across multiple datasets and evaluation metrics, demonstrating significant improvements in both persona fidelity and interaction synergy.</p>
+
+          <div class="highlight-box">
+            <h4 class="title is-4">Key Results</h4>
+          </div>
+
+          <div class="columns">
+            <div class="column">
+              <div class="metric-card">
+                <span class="metric-number">+14.1</span>
+                <span class="metric-label">Persona Consistency Improvement</span>
+              </div>
+            </div>
+            <div class="column">
+              <div class="metric-card">
+                <span class="metric-number">+10.6</span>
+                <span class="metric-label">Social Contribution Improvement</span>
+              </div>
+            </div>
+            <div class="column">
+              <div class="metric-card">
+                <span class="metric-number">0.187%</span>
+                <span class="metric-label">Trainable Parameters (vs Full)</span>
+              </div>
+            </div>
+          </div>
+
+          <h4 class="title is-4" style="margin-top: 30px;">Empathetic Dialogues Results</h4>
+          <img src="./media/figures/empathetic_dialogues_persona.png" alt="Empathetic Dialogues Results" class="empathetic-dialogues-results-image">
+
+          <h4 class="title is-4" style="margin-top: 30px;">Collaborative Interaction Metrics</h4>
+          <img src="./media/figures/empathetic_dialogues_collective.png" alt="Collaborative Interaction Metrics on Empathetic Dialogues" class="collaborative-interaction-metrics-image">
+        </div>
+      </div>
+    </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column">
+        <div class="content">
+          <h2 class="title is-3">Experimental Setup</h2>
+
+          <div class="highlight-box">
+            <h4 class="title is-4">Evaluation Datasets</h4>
+          </div>
+
+          <p class="dataset-description">
+            <strong>Empathetic Dialogues</strong>: A benchmark dataset for empathetic conversation grounded in emotional situations. We categorize dialogues by sentiment valence (positive, negative, neutral) to evaluate how MASCOT agents provide emotional support across different affective contexts.
+          </p>
+          <p class="dataset-description">
+            <strong>QMSum</strong>: A query-based multi-domain meeting summarization benchmark covering academic, committee, and product meetings. This dataset tests MASCOT's ability to coordinate collaborative discussions in professional workplace settings.
+          </p>
+
+          <h4 class="title is-4">Agent Personas</h4>
+          <div class="columns">
+            <div class="column">
+              <div class="agent-card">
+                <h5><strong>The Anchor</strong></h5>
+                <p>Emotional Validator - Provides empathetic support and emotional grounding</p>
+              </div>
+            </div>
+            <div class="column">
+              <div class="agent-card">
+                <h5><strong>The Catalyst</strong></h5>
+                <p>Critical Thinker - Offers Socratic questioning and cognitive reframing</p>
+              </div>
+            </div>
+          </div>
+          <div class="columns">
+            <div class="column">
+              <div class="agent-card">
+                <h5><strong>The Beacon</strong></h5>
+                <p>Growth Advocate - Provides growth-oriented positive reinforcement</p>
+              </div>
+            </div>
+            <div class="column">
+              <div class="agent-card">
+                <h5><strong>Action Guide</strong></h5>
+                <p>Practical Advisor - Offers actionable suggestions and structured guidance</p>
+              </div>
+            </div>
+          </div>
+
+          <h4 class="title is-4">Baselines</h4>
+          <div class="columns">
+            <div class="column">
+              <div class="methodology-step">
+                <h5>Prompting Methods</h5>
+                <p>Zero-shot, Few-shot, Supervised Fine-tuning (SFT)</p>
+              </div>
+            </div>
+            <div class="column">
+              <div class="methodology-step">
+                <h5>Reasoning Methods</h5>
+                <p>Chain-of-Thoughts (CoT), Self-Consistency</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column">
+        <div class="content">
+          <h2 class="title is-3">Ablation Study</h2>
+          <p>We analyze the contribution of each component by systematically removing them. The persona alignment module proves most critical for maintaining individual agent quality.</p>
+
+          <img src="./media/figures/ablation.png" alt="Ablation Study Results" class="ablation-study-results-image">
+
+          <div class="highlight-box">
+            <h4>Key Insight</h4>
+            <p>Removing persona-specific prompting (<strong>MASCOT-P</strong>) resulted in the most significant performance drop, particularly in <em>Empathetic Support Quality</em> (72.8 → 65.1) and <em>Consistency</em> (76.6 → 72.3). Without explicit persona grounding, agents default to generic AI assistant behaviors.</p>
+          </div>
+
+          <div class="methodology-step">
+            <h5>Impact of Collaborative Optimization</h5>
+            <p>The <strong>MASCOT-C</strong> variant with randomized speaking orders primarily affected <em>Social Contribution</em> and <em>Relevance & Coherence</em>. The collaborative module ensures each agent's contribution builds upon the previous turn rather than reacting in isolation.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column">
+        <div class="content">
+          <h2 class="title is-3">MBTI Personality Analysis</h2>
+          <p>To investigate MASCOT's effectiveness at scale, we simulate users with 16 Myers-Briggs Type Indicator (MBTI) profiles.</p>
+
+          <img src="./media/figures/heatmap_mbti.png" alt="MBTI Heatmap" class="mbti-heatmap-image">
+
+          <div class="columns" style="margin-top: 20px;">
+            <div class="column">
+              <div class="agent-card">
+                <h5><strong>The Anchor (Emotional Validator)</strong></h5>
+                <p>Consistently outperforms other agents across most user categories, particularly with Diplomats (INFP: 76.6) and specific Analysts (ENTJ: 76.0).</p>
+              </div>
+            </div>
+            <div class="column">
+              <div class="agent-card">
+                <h5><strong>The Beacon (Growth Advocate)</strong></h5>
+                <p>Demonstrates highest stability across Sentinel category, maintaining narrow performance variance (71.60-74.21).</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column">
+        <div class="content">
+          <h2 class="title is-3">Case Study</h2>
+
+          <img src="./media/figures/case_study.png" alt="Case Study Examples" class="case-study-examples-image">
+
+          <div class="methodology-step">
+            <h5>How Multi-Agent Coordination Enables Better Support</h5>
+            <p><strong>The Anchor:</strong> Provides emotional validation and establishes trust with the user.</p>
+            <p><strong>The Catalyst:</strong> Offers cognitive reframing and encourages deeper reflection.</p>
+            <p><strong>The Beacon:</strong> Provides growth-oriented perspectives and positive reinforcement.</p>
+            <p><strong>Meta-Agent:</strong> Coordinates turn-taking to ensure diverse, non-redundant contributions.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+</section>
+
+<section class="section" id="BibTeX" style="background-color: #f8f9ff;">
+  <div class="container is-max-desktop content">
+    <h2 class="title">BibTeX</h2>
+    <pre><code>@article{wang2026mascot,
+  title={MASCOT: Towards Multi-Agent Socio-Collaborative Companion Systems},
+  author={Wang, Yiyang and Jin, Yiqiao and Cabral, Alex and Hester, Josiah},
+  journal={arXiv:2601.14230},
+  year={2026}
+}
+</code></pre>
+  </div>
+</section>
+
+<section class="section" id="Acknowledgement">
+  <div class="container is-max-desktop content">
+    <h2 class="title">Usage and License Notices</h2>
+    <p>
+      The data, code and model checkpoint are intended and licensed mainly for research.
+    </p>
+    <p>
+      This website is licensed under the <a rel="license"
+                                          href="http://creativecommons.org/licenses/by-sa/4.0/">Creative
+      Commons Attribution-ShareAlike 4.0 International License</a>.
+    </p>
+  </div>
+</section>
+
+</body>
+</html>
