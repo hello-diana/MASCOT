@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mascot"
+version = "0.1.0"
+description = "MASCOT: a multi-agent socio-collaborative companion framework (persona-aware behavioral alignment + collaborative dialogue optimization)"
+readme = "README.md"
+requires-python = ">=3.10"
+# NOTE: license intentionally unspecified — see LICENSE-TODO.md (pending author review).
+
+# Core dependencies: enough to generate MASCOT episodes and run rubric
+# evaluation against a vLLM OpenAI-compatible server (served separately).
+dependencies = [
+    "openai>=1.0",
+    "datasets>=2.19",
+    "transformers>=4.51",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+    "pillow>=10.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# Reward-model / GRPO / director training (LoRA via peft, trainers via trl).
+train = [
+    "torch>=2.4",
+    "trl>=0.17",
+    "peft>=0.11",
+    "accelerate>=0.30",
+]
+# Local model serving (scripts/serve_vllm.py) or in-process VLLMModel.
+serve = [
+    "vllm>=0.8",
+]
+# Automatic non-LLM metrics (NLI contradiction, Self-BLEU) in src/eval/automatic_metrics.py.
+metrics = [
+    "torch>=2.4",
+    "nltk>=3.8",
+]
+# Optional experiment tracking. All trainers run without wandb; it is only
+# used when the WANDB_PROJECT environment variable is set.
+wandb = [
+    "wandb>=0.17",
+]
+# Optional API-based judges (OpenAI judge works with core deps alone).
+api-judges = [
+    "anthropic>=0.34",
+    "google-generativeai>=0.7",
+]
+
+[tool.setuptools]
+packages = { find = { include = ["src*", "config*"] } }
