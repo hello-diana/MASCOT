@@ -9,6 +9,8 @@ from collections import OrderedDict
 
 from src.utils.transcript_utils import format_conversation_history_empathetic
 
+from src.utils.run_metadata import record_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -287,6 +289,8 @@ def simulate_user_turn(
     user_simulator,
     user_max_tokens: int,
     user_temperature: float,
+    strict: bool = False,
+    counters: dict = None,
 ):
     """Simulate user replies with escalating probability.
 
@@ -335,6 +339,9 @@ def simulate_user_turn(
         state = conv_states[key]
         raw = user_responses[i].strip()
         if not raw:
+            # Exhausted-retry generation failure surfaces as "".
+            record_failure(counters, "num_empty_responses", strict,
+                           f"empty user response (turn {turn_idx}, conv {key})")
             continue
 
         json_str = None
@@ -363,6 +370,7 @@ def simulate_user_turn(
         emotion_before = state["current_emotion"]
         state["turns"].append({
             "turn_idx": turn_idx,
+            "round_id": turn_idx,
             "turn_type": "user",
             "response": user_text,
             "emotion_before": emotion_before,

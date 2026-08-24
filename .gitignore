@@ -5,6 +5,7 @@ logs/
 wandb/
 checkpoints/
 docs
+tests
 
 # Model weights are never committed (LoRA adapters are saved under outputs/)
 *.safetensors

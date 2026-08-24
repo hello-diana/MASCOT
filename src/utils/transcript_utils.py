@@ -9,6 +9,7 @@ evaluation scripts to avoid code duplication.
 from typing import List, Dict
 from tqdm import tqdm
 from config.persona_config import AGENTS
+from src.utils.text import extract_final_response
 
 
 def segment_transcript(transcript: List[Dict], turns_per_segment: int = 100) -> List[List[Dict]]:
@@ -125,8 +126,12 @@ def format_conversation_history(turns: List[Dict], name_key: str = 'agent_name')
     conversation_history = ""
     for turn in turns:
         # Strip thinking tags if present
-        clean_response = turn['response'].split('</think>', 1)[-1].strip()
-        conversation_history += f"[{turn[name_key]} agent]: {clean_response}\n"
+        clean_response = extract_final_response(turn['response'])
+        if turn.get('turn_type') == 'user':
+            # Simulated-user turns carry no agent name.
+            conversation_history += f"[User]: {clean_response}\n"
+        else:
+            conversation_history += f"[{turn[name_key]} agent]: {clean_response}\n"
     return conversation_history
 
 
@@ -143,7 +148,7 @@ def format_conversation_history_empathetic(turns: List[Dict]) -> str:
     """
     conversation_history = ""
     for turn in turns:
-        clean_response = turn['response'].split('</think>', 1)[-1].strip()
+        clean_response = extract_final_response(turn['response'])
         if turn.get('turn_type') == 'agent':
             conversation_history += f"[{turn['agent_name']}]: {clean_response}\n"
         elif turn.get('turn_type') == 'user':

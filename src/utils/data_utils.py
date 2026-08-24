@@ -17,6 +17,7 @@ from src.const import (
     DATASET2HF,
 )
 from src.prompts.persona_templates import MascotPersonaTemplates
+from src.utils.text import strip_closed_reasoning
 logger = logging.getLogger(__name__)
 
 def read_jsonl(f):
@@ -26,12 +27,8 @@ def read_json(f):
     return json.load(open(f, 'r'))
 
 def clean_response(response: str) -> str:
-    """Remove <think> tags from responses for readability."""
-    if not response:
-        return ''
-    # Remove <think>...</think> blocks
-    cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
-    return cleaned.strip()
+    """Remove closed <think>...</think> blocks (see src.utils.text)."""
+    return strip_closed_reasoning(response)
 
 def get_file_timestamps(file_path):
     """Get file creation and modification timestamps.

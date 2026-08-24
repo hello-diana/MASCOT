@@ -63,6 +63,17 @@ def _normalize_gpu_groups(gpu_groups) -> list[list[int]]:
     return [list(g) for g in gpu_groups]
 
 
+def _rendezvous_port(base_port: int, job_counter: int, group_idx: int) -> int:
+    """Unique torchrun rendezvous port for a dispatched job.
+
+    A fresh port per job avoids EADDRINUSE when a group slot is reused while
+    the previous job's rendezvous socket is still in TIME_WAIT. The offset
+    wraps within an explicit range so a long sweep never climbs out of valid
+    port space (ports stay in [base_port, base_port + 30000)).
+    """
+    return base_port + (job_counter * 16 + group_idx * 4) % 30000
+
+
 def log_failed_cmd(cmd: list[str], file: str = "failed_commands.md"):
     """Print and append a failed command with ET timestamp to failed_commands.md."""
     cmd_str = " ".join(cmd)
@@ -187,7 +198,7 @@ class GPUPool:
         env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, group))
         env["MASTER_ADDR"] = "127.0.0.1"
         # Use unique port per job to avoid EADDRINUSE from rapid job cycling
-        env["MASTER_PORT"] = str(self.base_port + self._job_counter * 10 + group_idx)
+        env["MASTER_PORT"] = str(_rendezvous_port(self.base_port, self._job_counter, group_idx))
         env["NPROC_PER_NODE"] = str(len(group))
         self._job_counter += 1
         env.update(job.env)
@@ -388,6 +399,7 @@ class DependencyScheduler:
         self.gpu_groups: list[list[int]] = _normalize_gpu_groups(gpu_groups)
         self.base_port = base_port
         self._running: dict[int, tuple[subprocess.Popen, JobNode, object]] = {}
+        self._job_counter = 0
 
     @property
     def gpu_ids(self) -> list[int]:
@@ -587,8 +599,12 @@ class DependencyScheduler:
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, group))
         env["MASTER_ADDR"] = "127.0.0.1"
-        env["MASTER_PORT"] = str(self.base_port + group_idx * 10)
+        # Use unique port per job to avoid EADDRINUSE from rapid job cycling:
+        # a finished job's rendezvous socket may still be in TIME_WAIT when
+        # the next node is dispatched to the same group.
+        env["MASTER_PORT"] = str(_rendezvous_port(self.base_port, self._job_counter, group_idx))
         env["NPROC_PER_NODE"] = str(len(group))
+        self._job_counter += 1
         env.update(node.env)
 
         log_fh = None

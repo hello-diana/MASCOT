@@ -6,17 +6,22 @@ import json
 import argparse
 import logging
 import random
+import time
 from argparse import Namespace
 from pathlib import Path
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
 from collections import OrderedDict
 from src.const import EMPATHETIC_DATASET, ESCONV_DATASET
-from src.arguments import parse_arguments
-from src.models.llm_models import VLLMModel, VLLMServerModel, load_vllm_model
+from src.arguments import parse_arguments, resolve_server_urls
+from src.models.llm_models import VLLMModel, get_shared_clients, resolve_role_identity
 from src.prompts.persona_templates import MascotPersonaTemplates
 from src.utils.transcript_utils import format_conversation_history_empathetic
 from src.utils.data_utils import mascot_output_path
+from src.utils.run_metadata import (episode_record_metadata, new_counters,
+                                    new_run_id, role_identity_metadata,
+                                    write_run_config, write_run_summary)
+from src.rubrics import PAPER_V1
 from src.generation.mascot_episode import run_mascot_episode_loop, EpisodeConfig
 from config.persona_config import EMPATHETIC_AGENTS
 from src.user.simulated_users import (
@@ -53,6 +58,8 @@ def generate_empathetic_episodes(
     user_big_five_profile: Optional[List[str]] = None,
     disable_directive: bool = False,
     num_shot: int = 3,
+    strict: bool = False,
+    counters: dict = None,
 ) -> OrderedDict:
     """Generate multi-turn empathetic conversations using the shared MASCOT loop."""
     if enable_user_simulation and user_simulator is None:
@@ -107,6 +114,8 @@ def generate_empathetic_episodes(
             conv_states, turn_idx, user_simulator,
             user_max_tokens=user_max_tokens,
             user_temperature=user_temperature,
+            strict=strict,
+            counters=counters,
         )
 
     # --- Run shared loop ---
@@ -123,10 +132,12 @@ def generate_empathetic_episodes(
             agent_max_tokens=agent_max_tokens,
             enable_thinking=enable_thinking,
             disable_directive=disable_directive,
+            strict=strict,
         ),
         build_directive_prompt=build_directive_prompt,
         build_agent_prompt=build_agent_prompt,
         on_turn_end=on_turn_end,
+        counters=counters,
     )
 
 
@@ -161,6 +172,12 @@ def save_empathetic_results(
     logger.info(f"Saving results to {output_file}")
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Base-vs-adapter identity from live client preflight (never fabricated).
+    base_models, adapter_extra = role_identity_metadata(
+        getattr(args, "_role_identity", {}),
+        {"director": args.directive_model, "speaker": args.agent_model,
+         "user": args.user_model})
 
     # Map internal persona keys to friendly names for output
     _AGENT_NAME_MAP = {
@@ -204,23 +221,36 @@ def save_empathetic_results(
                 'num_turns': len([t for t in state['turns'] if t.get('turn_type') == 'agent']),
                 'turns': remapped_turns,
                 'agents_spoken': remapped_agents_spoken,
-                'metadata': {
-                    'directive_model': args.directive_model,
-                    'agent_model': args.agent_model,
-                    'user_model': args.user_model if args.enable_user_simulation else None,
-                    'num_turns': args.num_turns,
-                    'user_response_probability': args.user_response_probability,
-                    'directive_temperature': args.directive_temperature,
-                    'agent_temperature': args.agent_temperature,
-                    'user_temperature': args.user_temperature,
-                    'directive_max_tokens': args.directive_max_tokens,
-                    'agent_max_tokens': args.agent_max_tokens,
-                    'user_max_tokens': args.user_max_tokens,
-                    'enable_thinking': not args.no_thinking,
-                    'enable_big_five': args.enable_big_five,
-                    'user_big_five_profile': args.user_big_five_profile,
-                    'mode': args.mode
-                }
+                # Canonical schema block first (evaluation dispatches on it);
+                # historical keys are kept alongside for backward compatibility.
+                'metadata': episode_record_metadata(
+                    system=args.mode,
+                    dataset=args.dataset,
+                    persona_set="big5" if args.enable_big_five else "default",
+                    director_model=base_models["director_model"],
+                    speaker_model=base_models["speaker_model"],
+                    user_model=(base_models["user_model"]
+                                if args.enable_user_simulation else None),
+                    rubric_version=PAPER_V1,
+                    extra={
+                        **adapter_extra,
+                        'directive_model': args.directive_model,
+                        'agent_model': args.agent_model,
+                        'user_model': args.user_model if args.enable_user_simulation else None,
+                        'num_turns': args.num_turns,
+                        'user_response_probability': args.user_response_probability,
+                        'directive_temperature': args.directive_temperature,
+                        'agent_temperature': args.agent_temperature,
+                        'user_temperature': args.user_temperature,
+                        'directive_max_tokens': args.directive_max_tokens,
+                        'agent_max_tokens': args.agent_max_tokens,
+                        'user_max_tokens': args.user_max_tokens,
+                        'enable_thinking': not args.no_thinking,
+                        'enable_big_five': args.enable_big_five,
+                        'user_big_five_profile': args.user_big_five_profile,
+                        'mode': args.mode,
+                    },
+                ),
             }
             f.write(json.dumps(result) + '\n')
 
@@ -286,74 +316,74 @@ def main(args: Optional[Namespace] = None):
     logger.info("\n[2/4] Loading models...")
 
 
-    # TODO
-    if args.vllm_server_url:
-        assert args.share_model, "share_model must be True when using vllm_server_url"
-        # Use external vLLM server via OpenAI-compatible API
-        logger.info(f"  Connecting to vLLM server at {args.vllm_server_url}")
-        server_model = VLLMServerModel(
+    agent_lora_path = None if args.mode == "mascot-i" else args.agent_lora_path
+    role_specs = {
+        "director": dict(
             model_name=args.directive_model,
-            base_url=args.vllm_server_url,
-            enable_thinking=not args.no_thinking,
+            lora_path=args.directive_lora_path,
+            gpu_memory_utilization=args.directive_gpu_memory,
+            tensor_parallel_size=args.directive_tensor_parallel_size,
+        ),
+        "speaker": dict(
+            model_name=args.agent_model,
+            lora_path=agent_lora_path,
+            gpu_memory_utilization=args.agent_gpu_memory,
+            tensor_parallel_size=args.agent_tensor_parallel_size,
+        ),
+    }
+    if args.enable_user_simulation:
+        role_specs["user"] = dict(
+            model_name=args.user_model,
+            lora_path=args.user_lora_path,
+            gpu_memory_utilization=args.user_gpu_memory,
+            tensor_parallel_size=args.user_tensor_parallel_size,
         )
-        directive_generator = server_model
-        agent_generator = directive_generator  
+    role_call_trace = [] if args.trace_role_calls else None
+    clients = get_shared_clients(role_specs, resolve_server_urls(args),
+                                 enable_thinking=not args.no_thinking,
+                                 share_model=args.share_model,
+                                 trace=role_call_trace)
+    directive_generator = clients["director"]
+    agent_generator = clients["speaker"]
+    user_simulator = clients.get("user")
+    args._role_identity = resolve_role_identity(
+        clients, {"director": args.directive_model, "speaker": args.agent_model,
+                  "user": args.user_model})
 
-        user_simulator = None
-        if args.enable_user_simulation:
-            logger.info("  User simulator shares vLLM server")
-            user_simulator = directive_generator
-    else:
-        # Load local vLLM models
-        agent_lora_path = None if args.mode == "mascot-i" else args.agent_lora_path
+    # Default-refuse on existing output; --overwrite replaces it.
+    output_file = get_output_path(args)
+    if output_file.exists():
+        if not args.overwrite:
+            logger.error(f"Output file already exists: {output_file}\n"
+                         "Pass --overwrite to replace it.")
+            raise SystemExit(2)
+        output_file.unlink()
+        logger.info(f"--overwrite: removed existing {output_file}")
 
-        if args.share_model:
-            logger.info("  Loading shared model (directive + agent)...")
-            agent_generator = load_vllm_model(
-                model_name_or_path=args.agent_model,
-                gpu_memory_utilization=args.agent_gpu_memory,
-                tensor_parallel_size=args.agent_tensor_parallel_size,
-                enable_lora=(args.agent_lora_path is not None and args.mode != "mascot-i"),
-                lora_path=agent_lora_path
-            )
-            directive_generator = agent_generator
-        else:
-            logger.info("  Loading directive model...")
-            directive_generator = load_vllm_model(
-                model_name_or_path=args.directive_model,
-                gpu_memory_utilization=args.directive_gpu_memory,
-                tensor_parallel_size=args.directive_tensor_parallel_size,
-                enable_lora=(args.directive_lora_path is not None),
-                lora_path=args.directive_lora_path
-            )
-
-            if (args.agent_model == args.directive_model
-                    and agent_lora_path == args.directive_lora_path):
-                logger.info("  Agent model shares directive model instance")
-                agent_generator = directive_generator
-            else:
-                logger.info("  Loading agent model...")
-                agent_generator = load_vllm_model(
-                    model_name_or_path=args.agent_model,
-                    gpu_memory_utilization=args.agent_gpu_memory,
-                    tensor_parallel_size=args.agent_tensor_parallel_size,
-                    enable_lora=(args.agent_lora_path is not None and args.mode != "mascot-i"),
-                    lora_path=agent_lora_path
-                )
-
-        user_simulator = None
-        if args.enable_user_simulation:
-            logger.info("  Loading user simulator model...")
-            user_simulator = load_vllm_model(
-                model_name_or_path=args.user_model,
-                gpu_memory_utilization=args.user_gpu_memory,
-                tensor_parallel_size=args.user_tensor_parallel_size,
-                enable_lora=(args.user_lora_path is not None),
-                lora_path=args.user_lora_path
-            )
+    # Per-run metadata sidecar: <output>.jsonl.runs/<run_id>/ — repeated runs
+    # never overwrite one another's run_config/run_summary.
+    run_id = new_run_id(args.mode)
+    run_meta_dir = output_file.with_name(output_file.name + ".runs") / run_id
+    started_at = time.time()
+    model_roles = {"director": args.directive_model, "speaker": args.agent_model}
+    if args.enable_user_simulation:
+        model_roles["user"] = args.user_model
+    served_models = next((c.served_models for c in clients.values()
+                          if hasattr(c, "served_models")), None)
+    write_run_config(
+        run_meta_dir, run_id=run_id, dataset=args.dataset,
+        system=args.mode,
+        persona_set="big5" if args.enable_big_five else "default",
+        model_roles=model_roles, rubric_version=PAPER_V1,
+        args=args, seed=args.seed,
+        extra={"output_file": str(output_file),
+               "role_identity": args._role_identity,
+               "served_models": served_models},
+    )
 
     # [3/4] Generate conversations
     logger.info("\n[3/4] Generating empathetic conversations...")
+    counters = new_counters()
     conversation_states = generate_empathetic_episodes(
         empathetic_contexts=empathetic_contexts,
         directive_generator=directive_generator,
@@ -373,13 +403,29 @@ def main(args: Optional[Namespace] = None):
         user_big_five_profile=args.user_big_five_profile,
         disable_directive=(args.mode == "mascot-g"),
         num_shot=args.n_shot,
+        strict=args.strict,
+        counters=counters,
     )
 
     # [4/4] Save results
     logger.info("\n[4/4] Saving results...")
-    output_file = get_output_path(args)
-
     save_empathetic_results(conversation_states, output_file, args)
+    extra = {"num_conversations": len(conversation_states),
+             "output_file": str(output_file)}
+    if args.trace_role_calls and role_call_trace is not None:
+        trace_file = run_meta_dir / "role_call_trace.jsonl"
+        with open(trace_file, "w") as tf:
+            for entry in role_call_trace:
+                tf.write(json.dumps(entry) + "\n")
+        called_ids = sorted({e["requested_model_id"] for e in role_call_trace})
+        extra["role_call_trace"] = str(trace_file)
+        extra["called_model_ids"] = called_ids
+        logger.info(f"Role-call trace: {len(role_call_trace)} requests to {called_ids} "
+                    f"-> {trace_file}")
+    write_run_summary(
+        run_meta_dir, run_id=run_id, status="completed",
+        counters=counters, started_at=started_at, extra=extra,
+    )
 
     # Summary
     logger.info("\n" + "=" * 70)

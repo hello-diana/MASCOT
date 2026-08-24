@@ -1,6 +1,90 @@
+import warnings
 from argparse import ArgumentParser, Namespace, ArgumentDefaultsHelpFormatter
 
-from src.const import DATASETS, QMSUM_DATASET
+from src.const import (
+    DATASETS,
+    DEFAULT_DIRECTOR_MODEL,
+    DEFAULT_SEED,
+    DEFAULT_SPEAKER_MODEL,
+    DEFAULT_USER_MODEL,
+    QMSUM_DATASET,
+)
+
+
+def add_server_args(parser) -> None:
+    """Role-specific vLLM endpoint arguments (shared across CLIs).
+
+    All defaults are None: a vLLM backend with no applicable URL either loads
+    the model locally in-process (eval pipelines) or is a hard CLI error
+    (server-only pipelines). Localhost URLs are never baked in as defaults —
+    shell scripts pass them explicitly.
+    """
+    parser.add_argument(
+        "--vllm-server-url", type=str, default=None,
+        help="Shared external vLLM server URL (e.g., http://localhost:8008/v1) "
+             "used for Director, Speaker, and User unless a role-specific URL "
+             "overrides it. The judge endpoint never inherits this URL."
+    )
+    parser.add_argument(
+        "--director-server-url", type=str, default=None,
+        help="vLLM server URL for the Director (overrides --vllm-server-url)"
+    )
+    parser.add_argument(
+        "--speaker-server-url", type=str, default=None,
+        help="vLLM server URL for the Speaker (overrides --vllm-server-url)"
+    )
+    parser.add_argument(
+        "--user-server-url", type=str, default=None,
+        help="vLLM server URL for the simulated User (overrides --vllm-server-url)"
+    )
+    parser.add_argument(
+        "--judge-server-url", type=str, default=None,
+        help="vLLM server URL for the judge (independent; does not inherit "
+             "--vllm-server-url)"
+    )
+
+
+def resolve_server_urls(args: Namespace) -> dict:
+    """Collect role→URL mapping consumed by src.models.llm_models.get_client."""
+    return {
+        "director": getattr(args, "director_server_url", None),
+        "speaker": getattr(args, "speaker_server_url", None),
+        "user": getattr(args, "user_server_url", None),
+        "judge": getattr(args, "judge_server_url", None),
+        "shared": getattr(args, "vllm_server_url", None),
+    }
+
+
+def resolve_deprecated(args: Namespace, parser, mapping: dict,
+                       new_defaults: dict = None) -> Namespace:
+    """Resolve deprecated CLI aliases.
+
+    ``mapping`` maps old argparse dest → new dest. If only the old flag was
+    set, warn and copy it to the new dest. If both were set to different
+    values, exit with a parser error (non-zero).
+
+    ``new_defaults`` maps a new dest to its parser default for flags whose
+    default is not None: a new-flag value equal to its default is treated as
+    "not explicitly set", so passing only the deprecated alias still works.
+    """
+    new_defaults = new_defaults or {}
+    for old, new in mapping.items():
+        old_val = getattr(args, old, None)
+        new_val = getattr(args, new, None)
+        if new in new_defaults and new_val == new_defaults[new]:
+            new_val = None
+        if old_val is None:
+            continue
+        old_flag = "--" + old.replace("_", "-")
+        new_flag = "--" + new.replace("_", "-")
+        if new_val is not None and new_val != old_val:
+            parser.error(f"Conflicting values for {new_flag}={new_val!r} and its "
+                         f"deprecated alias {old_flag}={old_val!r}; pass only {new_flag}.")
+        if new_val is None:
+            warnings.warn(f"{old_flag} is deprecated; use {new_flag}", DeprecationWarning,
+                          stacklevel=2)
+            setattr(args, new, old_val)
+    return args
 
 
 def build_parser() -> ArgumentParser:
@@ -57,15 +141,15 @@ def build_parser() -> ArgumentParser:
     # Model arguments
     model_group = parser.add_argument_group('Models')
     model_group.add_argument(
-        "--directive-model", type=str, default="Qwen/Qwen3-8B",
-        help="Directive model name or path"
+        "--directive-model", type=str, default=DEFAULT_DIRECTOR_MODEL,
+        help="Director (directive) model name or path"
     )
     model_group.add_argument(
-        "--agent-model", type=str, default="Qwen/Qwen3-8B",
-        help="Agent model name or path"
+        "--agent-model", type=str, default=DEFAULT_SPEAKER_MODEL,
+        help="Speaker (agent) model name or path"
     )
     model_group.add_argument(
-        "--user-model", type=str, default="Qwen/Qwen3-8B",
+        "--user-model", type=str, default=DEFAULT_USER_MODEL,
         help="User simulator model name or path (only used if --enable-user-simulation)"
     )
     model_group.add_argument(
@@ -80,11 +164,7 @@ def build_parser() -> ArgumentParser:
         "--user-lora-path", type=str, default=None,
         help="Path to user simulator LoRA adapters"
     )
-    model_group.add_argument(
-        "--vllm-server-url", type=str, default=None,
-        help="URL of external vLLM server (e.g., http://localhost:8000/v1). "
-             "When set, uses VLLMServerModel instead of loading local VLLMModel."
-    )
+    add_server_args(model_group)
     model_group.add_argument(
         "--share-model", action="store_true",
         help="Load a single vLLM model (configured via --agent-model/--agent-lora-path) "
@@ -161,16 +241,36 @@ def build_parser() -> ArgumentParser:
     # Output arguments
     output_group = parser.add_argument_group('Output')
     output_group.add_argument(
-        "--output-dir", type=str, default="outputs/mascot_eval",
-        help="Output directory for results"
+        "--output-dir", type=str, default="outputs",
+        help="Output root; eval results land in <output-dir>/mascot_eval/<dataset>/<split>"
     )
     output_group.add_argument(
         "--suffix", type=str, default="",
         help="Optional suffix for output filename"
     )
+    output_group.add_argument(
+        "--overwrite", action="store_true",
+        help="Replace an existing output file for this configuration. Default: "
+             "refuse to run when the output exists. (There is no --resume for "
+             "episode generation: a run writes its whole output atomically at "
+             "the end, so partial results cannot be continued.)"
+    )
 
     # Misc arguments
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed")
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="Terminate on the first generation failure, malformed directive, "
+             "or empty response. Default (tolerant) mode records failure "
+             "counters in run_summary.json and continues."
+    )
+    parser.add_argument(
+        "--trace-role-calls", action="store_true",
+        help="Record every generation request (role, requested model id, "
+             "LoRA-alias flag, completion tokens, success) to "
+             "role_call_trace.jsonl in the run metadata directory. "
+             "Server-backend requests only."
+    )
     parser.add_argument(
         "--mode", type=str, default="mascot",
         choices=["mascot", "mascot-g", "mascot-i"],

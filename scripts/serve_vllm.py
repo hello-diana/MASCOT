@@ -27,7 +27,35 @@ def main():
     parser.add_argument("--max-model-len", type=int, default=32768)
     parser.add_argument("--reasoning-parser", default=None,
                         help="Optional reasoning parser (e.g. 'qwen3')")
+    parser.add_argument("--lora-modules", nargs="+", default=None, metavar="NAME=PATH",
+                        help="Serve LoRA adapters as additional model ids alongside "
+                             "the base model, e.g. "
+                             "--lora-modules mascot-director=outputs/llm/grpo_Director_QMSum_Qwen3-8B "
+                             "mascot-speaker=outputs/llm/grpo_Speaker_individual_QMSum_Qwen3-8B. "
+                             "Implies --enable-lora; --max-loras and --max-lora-rank "
+                             "are inferred (override via passthrough flags).")
     args, extra = parser.parse_known_args()
+
+    lora_flags = []
+    if args.lora_modules:
+        import json
+        max_rank = 16
+        for pair in args.lora_modules:
+            if "=" not in pair:
+                parser.error(f"--lora-modules entries must be NAME=PATH, got {pair!r}")
+            name, path = pair.split("=", 1)
+            cfg_path = os.path.join(path, "adapter_config.json")
+            if not os.path.isfile(cfg_path):
+                parser.error(f"LoRA module {name!r}: {cfg_path} not found — "
+                             "point at a saved adapter directory")
+            with open(cfg_path) as f:
+                max_rank = max(max_rank, int(json.load(f).get("r", 16)))
+        lora_flags = [
+            "--enable-lora",
+            "--lora-modules", *args.lora_modules,
+            "--max-loras", str(len(args.lora_modules)),
+            "--max-lora-rank", str(max_rank),
+        ]
 
     visible = os.environ.get("CUDA_VISIBLE_DEVICES")
     if visible and "," not in args.gpus and int(args.gpus) <= len(visible.split(",")):
@@ -46,7 +74,8 @@ def main():
     ]
     if args.reasoning_parser:
         cmd += ["--reasoning-parser", args.reasoning_parser]
-    cmd += extra  # pass any additional vLLM flags through
+    cmd += lora_flags
+    cmd += extra  # pass any additional vLLM flags through (explicit flags win)
 
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=args.gpus)
     print("Launching:", " ".join(cmd), f"(CUDA_VISIBLE_DEVICES={args.gpus})")

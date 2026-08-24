@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from openai import AzureOpenAI, OpenAI
 
+from src.const import DEFAULT_SPEAKER_MODEL
+from src.utils.text import extract_final_response
 
 
 logger = logging.getLogger(__name__)
@@ -33,10 +35,25 @@ class AgentResponse:
         }
 
 
+def build_chat_messages(prompt: str, system_prompt: Optional[str] = None) -> List[Dict[str, str]]:
+    """Canonical chat-message list used by BOTH vLLM backends.
+
+    Local (VLLMModel) and server (VLLMServerModel) generation must format the
+    same logical input identically: this is the single place messages are
+    assembled. The local backend renders these messages with the tokenizer's
+    chat template; the server backend sends them to /chat/completions, where
+    the server applies the same template.
+    """
+    msgs = []
+    if system_prompt:
+        msgs.append({"role": "system", "content": system_prompt})
+    msgs.append({"role": "user", "content": prompt})
+    return msgs
+
+
 def parse_json_response(text: str) -> Optional[Dict]:
     """Try to parse a JSON object from model response text."""
-    if "</think>" in text:
-        text = text.split("</think>", 1)[1].strip()
+    text = extract_final_response(text, strip_without_tag=False)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -109,18 +126,31 @@ class VLLMModel:
 
         return SamplingParams(**kwargs)
 
+    def _render_chat_prompt(self, prompt: str, system_prompt: Optional[str],
+                            enable_thinking: bool) -> str:
+        """Render the canonical chat messages with the tokenizer's chat template.
+
+        This mirrors what the vLLM server does for /chat/completions, so local
+        and server backends see identically formatted inputs.
+        """
+        messages = build_chat_messages(prompt, system_prompt)
+        try:
+            return self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=enable_thinking)
+        except TypeError:
+            # Chat template without an enable_thinking kwarg (non-Qwen3 models)
+            return self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True)
+
     def generate_batch(self, prompts: List[str], temperature: float = None, top_p: float = None,
                        max_tokens: int = None, enable_thinking: bool = None,
                        response_format=None, lora_request=None,
                        desc: str = "Generating", system_prompt: Optional[str] = None) -> List[str]:
-        # Completion-style backend: prompts are self-contained; a chat system
-        # prompt is not applicable. Warn instead of silently dropping.
-        if system_prompt:
-            logger.warning("VLLMModel.generate_batch ignores system_prompt "
-                           "(completion-style backend; prompts are self-contained)")
         temperature = temperature if temperature is not None else self.temperature
         top_p = top_p if top_p is not None else self.top_p
         max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        thinking = self.enable_thinking if enable_thinking is None else enable_thinking
 
         params = self._build_sampling_params(temperature, top_p, max_tokens,
                                              enable_thinking, response_format)
@@ -129,9 +159,11 @@ class VLLMModel:
             from vllm.lora.request import LoRARequest
             lora_request = LoRARequest("sft_adapter", 1, self.lora_path)
 
+        # Same logical messages + same chat template as the server backend.
+        rendered = [self._render_chat_prompt(p, system_prompt, thinking) for p in prompts]
 
         logger.info(f"[vLLM Local] {desc} ({len(prompts)} prompts) ...")
-        outputs = self.llm.generate(prompts, params, use_tqdm=True, lora_request=lora_request)
+        outputs = self.llm.generate(rendered, params, use_tqdm=True, lora_request=lora_request)
         logger.info(f"[vLLM Local] {desc} complete: {len(outputs)} responses")
         return [output.outputs[0].text for output in outputs]
 
@@ -141,27 +173,77 @@ class VLLMServerModel:
     """Connects to an external vLLM server via OpenAI-compatible API.
 
     This avoids in-process model loading (30-300s) by connecting to a
-    persistent vLLM server started separately (e.g., `vllm serve Qwen/Qwen3-0.6B`).
+    persistent vLLM server started separately (see scripts/serve_vllm.py,
+    e.g. `python scripts/serve_vllm.py --model Qwen/Qwen3-8B --gpus 2 --port 8008`).
     """
 
     def __init__(
         self,
         model_name: str,
-        base_url: str = "http://localhost:8000/v1",
+        base_url: str,
         max_concurrent_requests: int = 32,
         enable_thinking: bool = True,
+        role: Optional[str] = None,
+        trace: Optional[list] = None,
     ):
+        if not base_url:
+            raise ValueError(
+                "VLLMServerModel requires an explicit base_url (no localhost "
+                "default is baked in); pass the server URL via the CLI flags.")
         self.model_name = model_name
         self.base_url = base_url
         self.max_concurrent_requests = max_concurrent_requests
         self.enable_thinking = enable_thinking
+        # Role-call tracing: when `trace` (a shared list) is provided, every
+        # request appends {role, requested_model_id, desc, is_lora_alias,
+        # completion_tokens, success} — runtime evidence of which model id
+        # each role actually called.
+        self.role = role
+        self.trace = trace
+        self.is_lora_alias = False
 
         # vLLM server doesn't need a real API key
         self.client = OpenAI(base_url=base_url, api_key="EMPTY")
 
-        # Test connection (warning only, not fatal)
-        self.client.models.list()
-        logger.info(f"Connected to vLLM server at {base_url} (model: {model_name})")
+        # Fatal, actionable preflight: verify the server is reachable AND that
+        # it actually serves the requested model id (catches typo'd LoRA aliases).
+        try:
+            served = self.client.models.list()
+        except Exception as e:
+            raise ConnectionError(
+                f"Cannot reach vLLM server at {base_url} "
+                f"(model {model_name!r}): {e}") from e
+        served_ids = [m.id for m in served.data]
+        if model_name not in served_ids:
+            raise ConnectionError(
+                f"vLLM server at {base_url} does not serve model {model_name!r}; "
+                f"served ids: {served_ids}")
+        self.lora_parent = None
+        # id -> {parent, root}: for LoRA modules vLLM reports parent=<base id>
+        # and root=<adapter path> — the base-vs-adapter identity evidence.
+        self.served_models = {
+            m.id: {"parent": getattr(m, "parent", None),
+                   "root": getattr(m, "root", None)}
+            for m in served.data
+        }
+        for m in served.data:
+            if m.id == model_name:
+                self.lora_parent = getattr(m, "parent", None)
+                self.is_lora_alias = self.lora_parent is not None
+        logger.info(f"Connected to vLLM server at {base_url} "
+                    f"(model: {model_name}, lora_alias: {self.is_lora_alias})")
+
+    def _record_trace(self, desc, completion_tokens, success):
+        if self.trace is None:
+            return
+        self.trace.append({
+            "role": self.role,
+            "requested_model_id": self.model_name,
+            "desc": desc,
+            "is_lora_alias": self.is_lora_alias,
+            "completion_tokens": completion_tokens,
+            "success": success,
+        })
         
     def generate_batch(
         self,
@@ -217,10 +299,7 @@ class VLLMServerModel:
 
         def _call_single(idx_prompt):
             idx, prompt = idx_prompt
-            msgs = []
-            if system_prompt:
-                msgs.append({"role": "system", "content": system_prompt})
-            msgs.append({"role": "user", "content": prompt})
+            msgs = build_chat_messages(prompt, system_prompt)
 
             for attempt in range(max_retries):
                 try:
@@ -237,6 +316,8 @@ class VLLMServerModel:
                     resp = self.client.chat.completions.create(**create_kwargs)
                     msg = resp.choices[0].message
                     response_text = (msg.content or "").strip()
+                    usage = getattr(resp, "usage", None)
+                    self._record_trace(label, getattr(usage, "completion_tokens", None), True)
 
                     # Warn when structured output was requested but is unparseable
                     if response_format is not None and parse_json_response(response_text) is None:
@@ -253,6 +334,7 @@ class VLLMServerModel:
                         logger.error(f"Prompt {idx} failed after {max_retries} attempts: {e}")
 
             # All retries exhausted
+            self._record_trace(label, None, False)
             return idx, ""
 
         label = desc or f"batch of {len(prompts)} prompts"
@@ -270,17 +352,25 @@ class VLLMServerModel:
 
 
 class GPT:
-    """OpenAI API wrapper."""
+    """OpenAI / Azure OpenAI API wrapper.
 
-    def __init__(self, model_name: str = "gpt-4o", max_workers: int = 8):
+    The provider must be chosen explicitly — there is no environment-based
+    fallback (the old ``USE_OPENAI_DIRECT`` env sniffing silently selected
+    Azure OpenAI by default and was removed).
+    """
+
+    def __init__(self, model_name: str = "gpt-4o", max_workers: int = 8,
+                 provider: str = "openai"):
         self.model_name = model_name
         self.max_workers = max_workers
-        # Default is AzureOpenAI; set USE_OPENAI_DIRECT=1 to route through
-        # the public OpenAI endpoint (bypasses Azure content filter).
-        if os.getenv("USE_OPENAI_DIRECT"):
+        if provider == "openai":
             self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        else:
+        elif provider == "azure-openai":
             self.client = AzureOpenAI()
+        else:
+            raise ValueError(f"Unknown GPT provider {provider!r}; "
+                             "expected 'openai' or 'azure-openai'")
+        self.provider = provider
 
     def generate(self, prompt: str, temperature: float = 0.9, top_p: float = 0.95,
                  max_tokens: int = 2048, **kwargs) -> str:
@@ -439,7 +529,7 @@ class Gemini:
 class Qwen:
     """HuggingFace Transformers wrapper (non-vLLM fallback)."""
 
-    def __init__(self, model_name: str = "Qwen/Qwen3-8B"):
+    def __init__(self, model_name: str = DEFAULT_SPEAKER_MODEL):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -514,8 +604,12 @@ def get_llm(model_type: str, model_name: str, max_tokens: int = 2048,
             temperature: float = 0.9, top_p: float = 0.95) -> Any:
     """Factory function to create an LLM instance based on model_type."""
     model_type_lower = model_type.lower()
-    if model_type_lower in ("gpt", "openai"):
-        return GPT(model_name=model_name)
+    if model_type_lower == "gpt":
+        raise ValueError("model_type 'gpt' is ambiguous; use 'openai' or 'azure-openai'")
+    if model_type_lower == "openai":
+        return GPT(model_name=model_name, provider="openai")
+    elif model_type_lower == "azure-openai":
+        return GPT(model_name=model_name, provider="azure-openai")
     elif model_type_lower in ("claude", "anthropic"):
         return Claude(model_name=model_name)
     elif model_type_lower in ("gemini", "google"):
@@ -569,3 +663,151 @@ def load_vllm_model(
     model = VLLMModel(**model_kwargs)
     logger.info("  Model loaded successfully")
     return model
+
+
+# Roles that fall back to the shared --vllm-server-url. The judge endpoint is
+# independently configurable and never inherits the shared URL.
+SHARED_URL_ROLES = ("director", "speaker", "user")
+
+
+def resolve_role_identity(clients: Dict[str, Any],
+                          requested: Dict[str, str]) -> Dict[str, Dict[str, Optional[str]]]:
+    """Base-model vs adapter identity per role, from live client preflight data.
+
+    For a served LoRA alias the client knows its base (``lora_parent``) and the
+    alias id; for base models / local clients the adapter is None. This is
+    runtime evidence (from /v1/models), not configuration.
+    """
+    identity = {}
+    for role, client in clients.items():
+        req = requested.get(role)
+        if getattr(client, "is_lora_alias", False):
+            identity[role] = {"base_model": client.lora_parent,
+                              "adapter": client.model_name}
+        else:
+            identity[role] = {"base_model": getattr(client, "model_name", req),
+                              "adapter": None}
+    return identity
+
+
+def get_client(
+    role: str,
+    *,
+    model_name: str,
+    server_urls: Optional[Dict[str, Optional[str]]] = None,
+    enable_thinking: bool = True,
+    gpu_memory_utilization: float = 0.7,
+    tensor_parallel_size: int = 1,
+    lora_path: Optional[str] = None,
+    max_concurrent_requests: int = 32,
+    trace: Optional[list] = None,
+) -> Union[VLLMModel, "VLLMServerModel"]:
+    """Single factory for role-specific vLLM clients (server or local).
+
+    ``server_urls`` maps roles ('director', 'speaker', 'user', 'judge') to
+    URLs plus an optional 'shared' entry (--vllm-server-url). Resolution:
+    role-specific URL > shared URL (director/speaker/user only) > local
+    in-process model. The judge role never falls back to the shared URL.
+    ``trace``: optional shared list receiving per-request role-call records
+    (server backend only).
+    """
+    server_urls = server_urls or {}
+    url = server_urls.get(role)
+    if url is None and role in SHARED_URL_ROLES:
+        url = server_urls.get("shared")
+
+    if url:
+        if lora_path:
+            raise ValueError(
+                f"Role '{role}': a local LoRA path ({lora_path}) cannot be applied "
+                "to an external vLLM server. Serve the adapter on the server "
+                "(scripts/serve_vllm.py --lora-modules alias=path) or merge it "
+                "first (src.train.merge_lora), or drop the server URL to load "
+                "the model locally.")
+        logger.info(f"[{role}] connecting to vLLM server at {url} (model: {model_name})")
+        return VLLMServerModel(
+            model_name=model_name,
+            base_url=url,
+            enable_thinking=enable_thinking,
+            max_concurrent_requests=max_concurrent_requests,
+            role=role,
+            trace=trace,
+        )
+
+    if trace is not None:
+        logger.warning(f"[{role}] role-call tracing is only supported on the "
+                       "server backend; local model calls will not be traced")
+    logger.info(f"[{role}] loading local vLLM model {model_name}")
+    return load_vllm_model(
+        model_name_or_path=model_name,
+        gpu_memory_utilization=gpu_memory_utilization,
+        tensor_parallel_size=tensor_parallel_size,
+        enable_lora=lora_path is not None,
+        lora_path=lora_path,
+    )
+
+
+def get_shared_clients(role_specs: Dict[str, Dict], server_urls: Dict[str, Optional[str]],
+                       *,
+                       enable_thinking: bool = True,
+                       share_model: bool = False,
+                       max_concurrent_requests: int = 32,
+                       trace: Optional[list] = None) -> Dict[str, Any]:
+    """Build clients for several roles.
+
+    ``role_specs`` maps role → {model_name, lora_path?, gpu_memory_utilization?,
+    tensor_parallel_size?}.
+
+    Sharing semantics:
+    - ``share_model=True`` forces the director spec to the speaker spec (the
+      historical --share-model behavior); the user role is never forced.
+    - Server (HTTP) clients are reused freely: identical
+      (url, model_name, thinking) → one client.
+    - LOCAL models are reused ONLY under explicit ``share_model=True``;
+      otherwise identical local specs are loaded separately (2× weight VRAM —
+      the per-role gpu_memory_utilization fractions must sum to < 1.0 per GPU).
+    """
+    role_specs = {role: dict(spec) for role, spec in role_specs.items()}
+    if share_model and "director" in role_specs and "speaker" in role_specs:
+        logger.info("--share-model: director reuses the speaker model spec")
+        role_specs["director"] = dict(role_specs["speaker"])
+
+    clients: Dict[str, Any] = {}
+    cache: Dict[tuple, Any] = {}
+    seen_local_keys: Dict[tuple, str] = {}
+    for role, spec in role_specs.items():
+        url = server_urls.get(role)
+        if url is None and role in SHARED_URL_ROLES:
+            url = server_urls.get("shared")
+        if url:
+            key = ("server", url, spec["model_name"], enable_thinking)
+        else:
+            key = ("local", spec["model_name"], spec.get("lora_path"),
+                   spec.get("tensor_parallel_size", 1),
+                   spec.get("gpu_memory_utilization", 0.7), enable_thinking)
+            if not share_model:
+                # Local models are shared only on explicit request.
+                if key in seen_local_keys:
+                    logger.warning(
+                        f"Roles {seen_local_keys[key]!r} and {role!r} have identical "
+                        f"local specs; loading {spec['model_name']} TWICE (2x weight "
+                        "VRAM; per-role gpu_memory_utilization fractions must sum to "
+                        "<1.0 per GPU). Pass --share-model to reuse one instance.")
+                seen_local_keys.setdefault(key, role)
+                key = key + (role,)
+        if key not in cache:
+            cache[key] = get_client(
+                role,
+                model_name=spec["model_name"],
+                server_urls=server_urls,
+                enable_thinking=enable_thinking,
+                gpu_memory_utilization=spec.get("gpu_memory_utilization", 0.7),
+                tensor_parallel_size=spec.get("tensor_parallel_size", 1),
+                lora_path=spec.get("lora_path"),
+                max_concurrent_requests=max_concurrent_requests,
+                trace=trace,
+            )
+        else:
+            logger.info(f"[{role}] reusing {key[0]} client for {spec['model_name']}")
+        clients[role] = cache[key]
+    return clients

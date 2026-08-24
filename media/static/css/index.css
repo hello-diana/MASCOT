@@ -183,16 +183,44 @@ body {
 .publication-authors a:hover { text-decoration: underline; }
 .author-block { display: inline-block; }
 
-.venue-badge {
-  display: inline-block;
-  margin: 6px auto 0;
-  padding: 5px 16px;
-  border-radius: var(--radius-pill);
+/* Acceptance banner (EMNLP 2026) */
+.venue-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 28px;
+  background: #fff;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  transition: var(--transition-lift);
+}
+.venue-banner:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--primary-1);
+}
+.venue-logo { height: 46px; width: auto; flex-shrink: 0; }
+.venue-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 2px;
+  border-left: 1px solid var(--line-soft);
+  padding-left: 20px;
+}
+.venue-accept {
+  font-family: 'Google Sans', 'Noto Sans', sans-serif;
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+.venue-rate {
+  font-size: 0.85rem;
   font-weight: 600;
-  font-size: 0.9rem;
-  color: #fff;
-  background: linear-gradient(135deg, var(--primary-1), var(--coral-2));
-  box-shadow: 0 6px 16px rgba(124, 92, 255, 0.3);
+  color: var(--ink-soft);
+  letter-spacing: 0.02em;
 }
 
 /* CTA buttons */
@@ -560,4 +588,8 @@ table.customTable thead { background-color: var(--tint-2); }
   .publication-title { font-size: 1.7rem !important; text-align: center !important; }
   .logo-container { flex-direction: column !important; gap: 16px !important; }
   .affiliation-logo { height: 46px; max-width: 80%; }
+  .venue-banner { flex-direction: column; gap: 12px; padding: 16px 20px; max-width: 92%; }
+  .venue-logo { height: 38px; max-width: 100%; }
+  .venue-text { align-items: center; text-align: center; border-left: none; padding-left: 0; }
+  .venue-accept { font-size: 0.95rem; }
 }

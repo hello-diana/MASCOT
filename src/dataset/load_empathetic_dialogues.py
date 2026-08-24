@@ -9,6 +9,7 @@ This script just exposes it on the command line:
 
 if __name__ == '__main__':
     import argparse
+    import sys
 
     from src.const import EMPATHETIC_DATASET, DATASET2HF
     from src.utils.data_utils import load_empathetic_dialogues

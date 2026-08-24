@@ -59,10 +59,6 @@
             </h1>
           </div>
 
-          <div class="has-text-centered" style="margin-bottom:10px;">
-            <span class="venue-badge">ACL 2026 · TrustNLP Workshop</span>
-          </div>
-
           <div class="is-size-5 publication-authors" style="text-align:center;">
             <span class="author-block"><a href="https://hello-diana.github.io/">Yiyang Wang</a><sup>1</sup>,</span>
             <span class="author-block"><a href="https://ahren09.github.io/">Yiqiao Jin</a><sup>1</sup>,</span>
@@ -77,6 +73,16 @@
           <div class="column has-text-centered" style="padding-top:18px;">
             <div class="logo-container" style="display:flex; justify-content:center; align-items:center; gap:40px; margin-bottom:18px;">
               <img src="./media/static/images/GeorgiaTech.png" alt="Georgia Institute of Technology" class="affiliation-logo">
+            </div>
+          </div>
+
+          <div class="column has-text-centered" style="padding-top:0;">
+            <div class="venue-banner">
+              <img src="./media/figures/emnlp_2026_logo_v1.png" alt="EMNLP 2026, Budapest" class="venue-logo">
+              <div class="venue-text">
+                <span class="grad-text">EMNLP 2026 Main Conference 🎉</span>
+                <span class="venue-rate">Acceptance Rate: 15%</span>
+              </div>
             </div>
           </div>
 
@@ -415,7 +421,7 @@
               <div class="persona-card p-anchor"
                    data-emoji="⚓" data-name="The Anchor" data-role="Emotional Validator" data-accent="var(--teal-1)"
                    data-traits="Validation-focused, Patient, Reflective, Emotionally-attuned, Non-judgmental"
-                   data-example="Provides deep affective empathy for high-vulnerability moments. In the case study, the Anchor names the user's <strong>&ldquo;quiet betrayal&rdquo;</strong> of an unmet wish rather than rushing to fix it.">
+                   data-example="Provides deep affective empathy for high-vulnerability moments, naming and validating the user's emotions rather than rushing to fix them.">
                 <span class="tap-hint"><i class="fas fa-expand"></i></span>
                 <span class="persona-emoji">⚓</span>
                 <h5>The Anchor</h5>
@@ -427,7 +433,7 @@
               <div class="persona-card p-catalyst"
                    data-emoji="✨" data-name="The Catalyst" data-role="Critical Thinker" data-accent="var(--amber)"
                    data-traits="Analytical, Curious, Solution-focused, Socratic, Perspective-shifting"
-                   data-example="Offers Socratic questioning and cognitive reframing. In the case study, the Catalyst <strong>bridges the gap</strong> between the user's desires and another's values through perspective-shifting.">
+                   data-example="Offers Socratic questioning and cognitive reframing, shifting perspective to bridge the gap between the user's desires and others' values.">
                 <span class="tap-hint"><i class="fas fa-expand"></i></span>
                 <span class="persona-emoji">✨</span>
                 <h5>The Catalyst</h5>
@@ -439,7 +445,7 @@
               <div class="persona-card p-beacon"
                    data-emoji="🔆" data-name="The Beacon" data-role="Growth Advocate" data-accent="var(--coral-1)"
                    data-traits="Enthusiastic, Strengths-focused, Celebratory, Energetic, Positive-reinforcing"
-                   data-example="Amplifies joy and pride with strengths-focused encouragement. In the case study, the Beacon <strong>reframes to celebrate the user's courage</strong> and self-expression rather than the material outcome.">
+                   data-example="Amplifies joy and pride with strengths-focused encouragement, reframing situations to celebrate the user's courage and self-expression.">
                 <span class="tap-hint"><i class="fas fa-expand"></i></span>
                 <span class="persona-emoji">🔆</span>
                 <h5>The Beacon</h5>
@@ -522,7 +528,7 @@
   </div>
 </section>
 
-<!-- ============================ ANALYSIS: ABLATION + SENSITIVITY + MBTI ============================ -->
+<!-- ============================ ANALYSIS: ABLATION + SENSITIVITY + USER PERSONALITY ============================ -->
 <section class="section" id="analysis">
   <div class="container is-max-desktop">
     <div class="columns is-centered">
@@ -559,52 +565,8 @@
             <p>The <strong>director</strong> remains effective even when scaled down to 1.7B, but the <strong>speaker</strong> size is the critical bottleneck — a 0.6B speaker causes a significant performance drop.</p>
           </div>
 
-          <h4 class="title is-4" style="margin-top:34px;">Performance Across MBTI User Types</h4>
-          <p>To investigate effectiveness at scale, we simulate users spanning the 16 Myers–Briggs (MBTI) profiles and measure each companion agent's performance.</p>
-          <div class="fig-card">
-            <img src="./media/figures/heatmap_mbti.png" alt="Performance across users with diverse MBTI types" class="zoomable"
-                 data-caption="Performance of the Anchor, Beacon, and Catalyst agents across users with 16 diverse MBTI types, grouped into Analysts, Diplomats, Sentinels, and Explorers.">
-            <p class="caption">Agent performance across 16 simulated MBTI user types (Anchor / Beacon / Catalyst).</p>
-          </div>
-          <div class="columns" style="margin-top:10px;">
-            <div class="column">
-              <div class="highlight-box">
-                <h4>The Anchor (Emotional Validator)</h4>
-                <p>Consistently strongest across most user categories, peaking with Diplomats (INFP: 76.6) and specific Analysts (ENTJ: 76.0).</p>
-              </div>
-            </div>
-            <div class="column">
-              <div class="highlight-box">
-                <h4>The Beacon (Growth Advocate)</h4>
-                <p>Highest stability across the Sentinel category, maintaining a narrow performance variance (71.6–74.2).</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============================ CASE STUDY ============================ -->
-<section class="section alt-bg" id="case-study">
-  <div class="container is-max-desktop">
-    <div class="columns is-centered">
-      <div class="column reveal">
-        <div class="content">
-          <h2 class="title is-3"><span class="grad-text">Case Study</span></h2>
-          <div class="fig-card">
-            <img src="./media/figures/case_study.png" alt="Case study examples" class="zoomable"
-                 data-caption="Case study: a user disappointed by receiving a blue car instead of the requested pink one. MASCOT's agents coordinate to deliver holistic, multi-dimensional support, unlike baselines that misread the emotional context.">
-            <p class="caption">How multi-agent coordination produces holistic, multi-dimensional support.</p>
-          </div>
-          <div class="methodology-step">
-            <h5>How Multi-Agent Coordination Enables Better Support</h5>
-            <p><strong>The Anchor:</strong> provides emotional validation and establishes trust with the user.</p>
-            <p><strong>The Catalyst:</strong> offers cognitive reframing and encourages deeper reflection.</p>
-            <p><strong>The Beacon:</strong> provides growth-oriented perspectives and positive reinforcement.</p>
-            <p><strong>Director:</strong> coordinates turn-taking to ensure diverse, non-redundant contributions.</p>
-          </div>
+          <h4 class="title is-4" style="margin-top:34px;">Robustness Across User Personalities</h4>
+          <p>To probe robustness across diverse users, the released pipeline can simulate users with <strong>Big Five (OCEAN)</strong> personality profiles (<code>--enable-big-five</code>, optionally <code>--user-big-five-profile</code>): the simulated user's replies and emotional trajectory are conditioned on the selected trait profile, and evaluation can be broken down per profile. See <code>src/user/simulated_users.py</code> in the repository.</p>
         </div>
       </div>
     </div>
@@ -617,10 +579,10 @@
     <h2 class="title"><span class="grad-text">BibTeX</span></h2>
     <div class="bibtex-wrap">
       <button class="copy-bib"><i class="fas fa-copy"></i> Copy</button>
-      <pre><code>@article{wang2026mascot,
+      <pre><code>@inproceedings{wang2026mascot,
   title={MASCOT: Towards Multi-Agent Socio-Collaborative Companion Systems},
   author={Wang, Yiyang and Jin, Yiqiao and Cabral, Alex and Hester, Josiah},
-  journal={arXiv:2601.14230},
+  booktitle={EMNLP},
   year={2026}
 }</code></pre>
     </div>
@@ -632,6 +594,11 @@
   <div class="container is-max-desktop content">
     <h2 class="title"><span class="grad-text">Usage and License Notices</span></h2>
     <p>The data, code and model checkpoint are intended and licensed mainly for research.</p>
+    <p>The source code is released under the
+      <a href="https://github.com/hello-diana/MASCOT/blob/main/LICENSE">Apache License 2.0</a>
+      (see <code>THIRD_PARTY_NOTICES.md</code> in the repository for the license scope of figures,
+      website assets, datasets, and third-party components).
+    </p>
     <p>This website is licensed under the
       <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License</a>.
     </p>

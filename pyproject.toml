@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "MASCOT: a multi-agent socio-collaborative companion framework (persona-aware behavioral alignment + collaborative dialogue optimization)"
 readme = "README.md"
 requires-python = ">=3.10"
-# NOTE: license intentionally unspecified — see LICENSE-TODO.md (pending author review).
+# Apache-2.0 applies to the source code; see THIRD_PARTY_NOTICES.md for the
+# license scope of figures, website assets, datasets, and third-party components.
+license = { text = "Apache-2.0" }
 
 # Core dependencies: enough to generate MASCOT episodes and run rubric
 # evaluation against a vLLM OpenAI-compatible server (served separately).
@@ -51,6 +53,11 @@ api-judges = [
     "anthropic>=0.34",
     "google-generativeai>=0.7",
 ]
+
+[project.urls]
+Homepage = "https://hello-diana.github.io/MASCOT/"
+Repository = "https://github.com/hello-diana/MASCOT"
+Paper = "https://arxiv.org/abs/2601.14230"
 
 [tool.setuptools]
 packages = { find = { include = ["src*", "config*"] } }

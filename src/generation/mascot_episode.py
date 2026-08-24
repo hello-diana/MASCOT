@@ -9,6 +9,9 @@ from typing import Callable, Dict, List, Optional, Any
 from collections import OrderedDict
 
 from src.models.llm_models import AgentResponse
+from src.generation.selection import (PERSONA_DEFAULT_DIRECTIVE,
+                                      SelectionResult, fallback_directive)
+from src.utils.run_metadata import record_failure
 
 logger = logging.getLogger(__name__)
 
@@ -103,16 +106,14 @@ class EpisodeConfig:
     # for LoRA checkpoints trained with structured-output rollouts — without it
     # the model can loop and emit duplicated replies.
     structured_agent_output: bool = True
+    # Strict mode: any generation failure, malformed directive, or empty
+    # response terminates the run instead of being counted and tolerated.
+    strict: bool = False
 
 
-_PERSONA_DEFAULT_DIRECTIVE = {
-    "the_anchor":   ("Validate the user's emotion with reflective, mirroring language. Do NOT advise or fix.",
-                     "warm and patient"),
-    "the_catalyst": ("Ask one Socratic, open-ended question that reframes the situation.",
-                     "curious and analytical"),
-    "the_beacon":   ("Identify a core human strength the user is showing and amplify it gently.",
-                     "warm and encouraging"),
-}
+# Single source of truth for fallback selection lives in
+# src/generation/selection.py; this alias keeps the historical name.
+_PERSONA_DEFAULT_DIRECTIVE = PERSONA_DEFAULT_DIRECTIVE
 
 
 def _random_agent(agents: dict, agents_spoken: dict) -> dict:
@@ -121,11 +122,8 @@ def _random_agent(agents: dict, agents_spoken: dict) -> dict:
     When directive parsing fails, we still want a meaningful (action, tone)
     pair so the agent doesn't fall back to its most common SFT phrase.
     """
-    unspoken = [n for n, c in agents_spoken.items() if c == 0]
-    name = random.choice(unspoken) if unspoken else random.choice(list(agents.keys()))
-    action, tone = _PERSONA_DEFAULT_DIRECTIVE.get(
-        name, ("Add your unique perspective", "use your best judgment"))
-    return {"agent_name": name, "action": action, "tone": tone}
+    return fallback_directive(agents, strategy="least_spoken",
+                              agents_spoken=agents_spoken).directive
 
 
 def run_mascot_episode_loop(
@@ -136,6 +134,7 @@ def run_mascot_episode_loop(
     build_directive_prompt: Callable[[dict], str],
     build_agent_prompt: Callable[[dict, dict], str],
     on_turn_end: Optional[Callable[[OrderedDict, int], None]] = None,
+    counters: Optional[Dict[str, int]] = None,
 ) -> OrderedDict:
     """Run the shared MASCOT multi-turn generation loop.
 
@@ -151,6 +150,9 @@ def run_mascot_episode_loop(
         on_turn_end: Optional hook called after each turn with
             ``(conversation_states, turn_idx)``.  Used by empathetic eval to run
             user simulation.
+        counters: Optional failure-counter dict (see
+            ``src.utils.run_metadata.new_counters``), mutated in place. In
+            ``config.strict`` mode the first failure raises instead.
 
     Returns:
         The same *conversation_states* OrderedDict, mutated in-place.
@@ -179,9 +181,16 @@ def run_mascot_episode_loop(
             directives = []
             fallback = 0
             for i, output in enumerate(directive_outputs):
+                if not (output or "").strip():
+                    # Exhausted-retry generation failure surfaces as "".
+                    record_failure(counters, "num_generation_failures", config.strict,
+                                   f"empty directive output (turn {turn_idx}, conv {keys[i]})")
                 d = parse_directive(output, agents)
                 if d is None:
+                    record_failure(counters, "num_directive_parse_failures", config.strict,
+                                   f"unparseable directive (turn {turn_idx}, conv {keys[i]})")
                     d = _random_agent(agents, conversation_states[keys[i]]["agents_spoken"])
+                    record_failure(counters, "num_random_agent_fallbacks", False)
                     fallback += 1
                 directives.append(d)
             if fallback:
@@ -217,8 +226,14 @@ def run_mascot_episode_loop(
                     response_text = raw
             else:
                 response_text = raw
+            if not (response_text or "").strip():
+                record_failure(counters, "num_empty_responses", config.strict,
+                               f"empty agent response (turn {turn_idx}, conv {k})")
             state["turns"].append({
                 "turn_idx": turn_idx,
+                # One round = one Director->Speaker(->User) cycle. Used by
+                # metadata-driven pairing in automatic metrics.
+                "round_id": turn_idx,
                 "directive": directives[i],
                 "agent_name": name,
                 "response": response_text,

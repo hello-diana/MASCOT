@@ -9,9 +9,13 @@ import torch
 from transformers import AutoTokenizer
 from trl import RewardTrainer, RewardConfig
 from datasets import load_from_disk, concatenate_datasets
+from src.const import DEFAULT_SEED
 from src.utils.data_utils import create_or_load_rl_dataset, clean_response
+from src.utils.paths import artifact_dir, ensure_writable_dir
 from src.utils.model_utils import create_lora_model, save_lora_adapter
 from src.prompts.prompt_reward_model import get_prompt_persona_reward_model
+from src.rubrics import (PAPER_V1, validate_dataset_rubric_version,
+                         write_checkpoint_metadata)
 from config.persona_config import AGENTS, EMPATHETIC_AGENTS
 from dotenv import load_dotenv
 
@@ -35,7 +39,10 @@ def main(args: argparse.Namespace):
             name=f"rm-{args.model_name.split('/')[-1]}"
         )
 
-    output_dir = os.path.join(args.output_dir, "reward_model", f"Individual_{args.dataset}_{args.model_name.split('/')[-1]}")
+    output_dir = str(artifact_dir("persona_reward", dataset=args.dataset,
+                                  model_name=args.model_name,
+                                  root=os.path.join(args.output_dir, "reward_model")))
+    ensure_writable_dir(output_dir, overwrite=args.overwrite or args.resume)
 
     # Load base model with LoRA for reward modeling (scalar output)
     logger.info(f"Loading model and tokenizer from {args.model_name}...")
@@ -89,11 +96,20 @@ def main(args: argparse.Namespace):
         full_dataset = concatenate_datasets(datasets_list)
         logger.info(f"Combined {len(full_dataset)} total rows from {len(datasets_list)} datasets")
 
+    # Rubric schema baked into the reward prompts: validated against the
+    # dataset's recorded rubric_version (mixed/mismatched → hard error;
+    # metadata-less data requires explicit --rubric-version/--assume-legacy-rubric).
+    rubric_version = validate_dataset_rubric_version(
+        full_dataset, requested=getattr(args, "rubric_version", None),
+        assume_legacy=getattr(args, "assume_legacy_rubric", False),
+        source=f"training data ({args.data_path})")
+    logger.info(f"Training rubric version: {rubric_version}")
+
     if isinstance(full_dataset, dict) and "test" in full_dataset:
         train_dataset = full_dataset["train"]
         eval_dataset = full_dataset["test"]
     else:
-        split_ds = full_dataset.train_test_split(test_size=0.1)
+        split_ds = full_dataset.train_test_split(test_size=0.1, seed=args.seed)
         train_dataset = split_ds["train"]
         eval_dataset = split_ds["test"]
 
@@ -115,7 +131,8 @@ def main(args: argparse.Namespace):
             # Strip <think> tags for clean evaluation
             response_text = clean_response(response_text)
             # Wrap in evaluation prompt
-            eval_prompt = get_prompt_persona_reward_model(persona_key, persona_spec, response_text)
+            eval_prompt = get_prompt_persona_reward_model(persona_key, persona_spec, response_text,
+                                                          rubric_version=rubric_version)
             example[col] = [{"role": "user", "content": eval_prompt}]
         return example
 
@@ -128,6 +145,8 @@ def main(args: argparse.Namespace):
     training_args = RewardConfig(
         output_dir=output_dir,
         num_train_epochs=args.num_epochs,
+        max_steps=args.max_steps,
+        seed=args.seed,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -155,21 +174,27 @@ def main(args: argparse.Namespace):
     )
 
     logger.info("Starting reward model training...")
-    trainer.train()
+    trainer.train(resume_from_checkpoint=True if args.resume else None)
 
     save_lora_adapter(model, output_dir, tokenizer)
+    write_checkpoint_metadata(output_dir, base_model=args.model_name,
+                              reward_type="persona", rubric_version=rubric_version)
 
     logger.info(f"Training complete! Model saved to {output_dir}")
 
 
 if __name__ == "__main__":
-    from src.train.train_args import add_training_args, add_data_args, add_lora_args, add_reward_model_args, resolve_data_path
+    from src.train.train_args import (add_training_args, add_data_args, add_lora_args,
+                                      add_output_policy_args, add_reward_model_args,
+                                      add_rubric_args, resolve_data_path)
 
     parser = argparse.ArgumentParser(description="Train reward model")
     add_training_args(parser)
     add_data_args(parser)
     add_lora_args(parser)
     add_reward_model_args(parser)
+    add_rubric_args(parser)
+    add_output_policy_args(parser)
     args = parser.parse_args()
     args.data_path = resolve_data_path(args)
     main(args)

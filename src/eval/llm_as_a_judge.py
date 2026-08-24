@@ -8,6 +8,7 @@ conversation evaluation with configurable turn ranges.
 
 import sys
 import os
+import time
 import traceback
 
 from tqdm import tqdm
@@ -25,6 +26,8 @@ from config.persona_config import AGENTS, EMPATHETIC_AGENTS
 from src.eval.rubric_evaluator import IndividualRubricEvaluator, GroupRubricEvaluator
 from src.utils.data_utils import get_file_timestamps, judge_metrics_path
 from src.utils.eval_utils import print_colored
+from src.utils.text import extract_final_response
+from src.utils.run_metadata import new_counters, write_run_summary
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -80,15 +83,10 @@ def load_mascot_conversations(input_file: Path) -> List[Dict]:
 def clean_response(response: str) -> str:
     """Remove <think></think> tags from MASCOT responses.
 
-    Args:
-        response: Raw response text (may contain thinking tags)
-
-    Returns:
-        Cleaned response without thinking tags
+    Delegates to src.utils.text.extract_final_response (split-once semantics:
+    text before the tag is dropped; no tag -> stripped input).
     """
-    if "</think>" in response:
-        return response.split("</think>", 1)[-1].strip()
-    return response.strip()
+    return extract_final_response(response)
 
 
 def extract_turn_range(
@@ -98,9 +96,14 @@ def extract_turn_range(
 ) -> List[Dict]:
     """Extract a specific range of turns from conversation.
 
+    Convention: half-open raw-index slice ``turns[start_idx:end_idx]`` over the
+    full turn list (user turns included, 0-based). ``end_idx=None`` or beyond
+    the list length means "to the end". Filtering (e.g. dropping user turns)
+    happens AFTER this slice, in the caller.
+
     Args:
         turns: Full list of conversation turns
-        start_idx: Starting turn index (inclusive, 0-based)
+        start_idx: Starting turn index (inclusive, 0-based, >= 0)
         end_idx: Ending turn index (exclusive, 0-based, None = all turns)
 
     Returns:
@@ -110,19 +113,13 @@ def extract_turn_range(
         extract_turn_range(turns, 0, 5) -> turns[0:5] (turns 0-4)
         extract_turn_range(turns, 2, 8) -> turns[2:8] (turns 2-7)
     """
+    if start_idx < 0:
+        raise ValueError(f"start_idx must be >= 0, got {start_idx}")
+    if end_idx is not None and end_idx < start_idx:
+        raise ValueError(f"end_idx ({end_idx}) must be >= start_idx ({start_idx})")
     if end_idx is None or end_idx > len(turns):
-        return turns
-        
-    else:
-        count = 0
-        for i, turn in enumerate(turns):
-            if turn.get('turn_type', None) != 'user':
-                count += 1
-            if count == end_idx:
-                return turns[:i+1]
-            
-                
-        return turns
+        end_idx = len(turns)
+    return turns[start_idx:end_idx]
 
 
 
@@ -199,20 +196,28 @@ def prepare_individual_evaluation_tasks(
     for conv_idx, conv in enumerate(conversations):
         # Extract context based on dataset type
         meeting_context = conv['meeting']['meeting_context'] if dataset_name == QMSUM_DATASET else conv['initial_situation']
-        turns = extract_turn_range(conv['turns'], turn_start, turn_end)
+        sliced = extract_turn_range(conv['turns'], turn_start, turn_end)
 
-        # Filter to agent turns only (for empathetic, removes user turns)
-        agent_turns = turns if dataset_name == QMSUM_DATASET else [turn for turn in turns if turn.get('turn_type') == 'agent']
-        if not agent_turns:
+        # Carry each turn's true index in the ORIGINAL turn list before any
+        # filtering; filtering user turns must not shift the indices used for
+        # context construction and result mapping.
+        indexed_turns = list(enumerate(sliced, start=turn_start))
+        if dataset_name != QMSUM_DATASET:
+            # Filter to agent turns only (for empathetic, removes user turns)
+            indexed_turns = [(gi, t) for gi, t in indexed_turns
+                             if t.get('turn_type') == 'agent']
+        else:
+            # QMSum episodes can carry simulated-user turns too (tagged
+            # turn_type='user'); untagged legacy turns are all agent turns.
+            indexed_turns = [(gi, t) for gi, t in indexed_turns
+                             if t.get('turn_type', 'agent') != 'user']
+        if not indexed_turns:
             logger.warning(f"No agent turns found in conversation {conv.get('id', conv_idx)}")
             continue
-        turns = agent_turns
 
         # Build batch for THIS conversation only
         conv_batch = []
-        for local_turn_idx, turn in enumerate(turns):
-            # Global turn index in original conversation
-            global_turn_idx = turn_start + local_turn_idx
+        for global_turn_idx, turn in indexed_turns:
 
             # Build context up to this turn (includes meeting + prior turns)
             conversation_context = build_conversation_history(
@@ -224,7 +229,14 @@ def prepare_individual_evaluation_tasks(
             
             
                 
-            if "mascot" in os.path.basename(args.input_file).lower():
+            # Prefer record metadata (schema block) over filename inference;
+            # only legacy files without metadata fall back to the filename.
+            _conv_meta = conv.get('metadata') or {}
+            if _conv_meta.get('schema_version'):
+                _is_mascot = str(_conv_meta.get('system', '')).startswith('mascot')
+            else:
+                _is_mascot = "mascot" in os.path.basename(args.input_file).lower()
+            if _is_mascot:
                 # Empathetic eval output remaps the_anchor/the_beacon/the_catalyst
                 # to alice/bob/cathy for friendlier output. Resolve back here.
                 _EMP_ALIAS = {"alice": "the_anchor", "bob": "the_beacon", "cathy": "the_catalyst"}
@@ -316,6 +328,22 @@ def parse_arguments() -> argparse.Namespace:
         help="Judge model name (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022', 'gemini-1.5-flash')"
     )
     eval_group.add_argument(
+        "--provider", type=str, default=None,
+        choices=["openai", "azure-openai", "anthropic", "gemini", "vllm"],
+        help="Judge backend provider (REQUIRED; never inferred from the model "
+             "name or environment). Non-vllm providers send conversation data "
+             "to the named external API."
+    )
+    eval_group.add_argument(
+        "--strict", action="store_true",
+        help="Terminate on the first evaluation failure instead of recording "
+             "counters and continuing."
+    )
+    eval_group.add_argument(
+        "--judge-server-url", type=str, default=None,
+        help="vLLM server URL for the judge (required with --provider vllm)"
+    )
+    eval_group.add_argument(
         "--dataset", type=str, required=True,
         choices=list(DATASETS),
         help=f"Dataset name: one of {list(DATASETS)} (ESConv reuses empathetic rubric)"
@@ -330,8 +358,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     eval_group.add_argument(
         "--vllm-judge-url", type=str, default=None,
-        help="URL of vLLM server for judge model (e.g., http://localhost:8000/v1). "
-             "When set, uses VLLMServerModel with --judge as model name."
+        help="(deprecated) alias for --judge-server-url"
     )
 
     # Judge prompt perturbation
@@ -351,7 +378,19 @@ def parse_arguments() -> argparse.Namespace:
         help="Suffix appended to the output filename before '.json' "
              "(e.g., '_perturb-reversed') so perturbed runs don't overwrite originals"
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    from src.arguments import resolve_deprecated
+    resolve_deprecated(args, parser, {"vllm_judge_url": "judge_server_url"})
+
+    # Provider is always explicit — never inferred from model name or env.
+    if args.provider is None:
+        parser.error("--provider is required (openai, azure-openai, anthropic, "
+                     "gemini, or vllm); the judge backend is never inferred")
+    if args.provider == "vllm" and not args.judge_server_url:
+        parser.error("--provider vllm requires --judge-server-url "
+                     "(e.g. http://localhost:8008/v1)")
+    return args
 
 
 def parse_criteria_order(s: Optional[str]) -> Optional[list]:
@@ -371,19 +410,19 @@ def main(args: Optional[Namespace] = None):
     # ESConv identity via the input-file path (e.g., outputs/mascot_eval/ESConv/test/...).
     if args.dataset == ESCONV_DATASET:
         args.dataset = EMPATHETIC_DATASET
-    if "big5" in args.input_file:
-        assert args.enable_big_five, "Big Five is not enabled"
 
     # Determine personality mode
     enable_personality = args.enable_big_five
     personality_field = 'user_big_five'
 
+    counters = new_counters()
+    started_at = time.time()
+
     # Validation
     input_file = Path(args.input_file)
     if not input_file.exists():
-        
         logger.error(f"Input file not found: {input_file}")
-        return
+        raise SystemExit(2)
     
     timestamps = get_file_timestamps(input_file)
     logger.info(f"Loading OUTPUT FILE from: {input_file.name}")
@@ -472,15 +511,33 @@ def main(args: Optional[Namespace] = None):
         original_convs = original_convs[:args.max_samples]
         logger.info(f"Limiting evaluation to {len(original_convs)} conversations (--max-samples={args.max_samples})")
 
+    # Dispatch on record metadata (schema_version block); fall back to legacy
+    # filename heuristics only for files written before the schema existed.
+    first_meta = (original_convs[0].get('metadata') or {}) if original_convs else {}
+    if first_meta.get('schema_version'):
+        persona_set = first_meta.get('persona_set', 'default')
+        if (persona_set == 'big5') != bool(args.enable_big_five):
+            logger.error(
+                f"Input metadata persona_set={persona_set!r} conflicts with "
+                f"--enable-big-five={args.enable_big_five}; pass the matching flag.")
+            raise SystemExit(2)
+    else:
+        logger.warning("Input records carry no schema metadata; falling back to "
+                       "filename-based inference (legacy file)")
+        if "big5" in os.path.basename(args.input_file) and not args.enable_big_five:
+            logger.error("Input filename suggests Big Five data but "
+                         "--enable-big-five was not set")
+            raise SystemExit(2)
+
     # Validate dataset format
     if args.dataset == QMSUM_DATASET:
         if not all('meeting' in conv for conv in original_convs[:5]):
             logger.error(f"Dataset specified as {QMSUM_DATASET!r} but missing 'meeting' field")
-            return
+            raise SystemExit(2)
     elif args.dataset == EMPATHETIC_DATASET:
         if not all('initial_situation' in conv for conv in original_convs[:5]):
             logger.error(f"Dataset specified as {EMPATHETIC_DATASET!r} but missing 'initial_situation' field")
-            return
+            raise SystemExit(2)
     logger.info(f"Dataset format validated: {args.dataset}")
 
     if args.dataset == QMSUM_DATASET:
@@ -492,23 +549,23 @@ def main(args: Optional[Namespace] = None):
         else:
             expected_group_ids = set(conv['conv_id'] for conv in original_convs)
 
-    # Initialize judge
+    # Initialize judge — provider is explicit (validated at parse time).
     judge_model_name = args.judge
-    if args.vllm_judge_url:
+    if args.provider == "vllm":
         judge_model = VLLMServerModel(
             model_name=judge_model_name,
-            base_url=args.vllm_judge_url,
+            base_url=args.judge_server_url,
             enable_thinking=False,  # Judges produce structured JSON, no thinking needed
         )
-    elif "gpt" in judge_model_name.lower():
-        judge_model = GPT(model_name=judge_model_name)
-    elif "claude" in judge_model_name.lower():
+    elif args.provider in ("openai", "azure-openai"):
+        judge_model = GPT(model_name=judge_model_name, provider=args.provider)
+    elif args.provider == "anthropic":
         judge_model = Claude(model_name=judge_model_name)
-    elif "gemini" in judge_model_name.lower():
+    elif args.provider == "gemini":
         judge_model = Gemini(model_name=judge_model_name)
     else:
-        logger.error(f"Unknown judge model: {judge_model_name}")
-        return
+        logger.error(f"Unsupported judge provider: {args.provider}")
+        raise SystemExit(2)
     
     if args.dataset == QMSUM_DATASET:
         agents = AGENTS
@@ -825,8 +882,29 @@ def main(args: Optional[Namespace] = None):
                 
 
     save_results(conversations)
-    # Validate results
-    assert len(conversations['individual']) == len(conversations['group']) == len(original_convs), "Individual and group eval counts must match"
+    # Validate results: strict mode fails hard on a count mismatch; tolerant
+    # mode records the shortfall as skipped samples in the run summary.
+    n_ind = len(conversations['individual'])
+    n_grp = len(conversations['group'])
+    n_src = len(original_convs)
+    if not (n_ind == n_grp == n_src):
+        msg = (f"Evaluation count mismatch: individual={n_ind}, group={n_grp}, "
+               f"source={n_src}")
+        if args.strict:
+            logger.error(msg)
+            raise SystemExit(1)
+        logger.warning(msg + " (tolerant mode: recording skipped samples)")
+        counters["num_skipped_samples"] += max(n_src - n_ind, 0) + max(n_src - n_grp, 0)
+
+    write_run_summary(
+        output_file.parent, run_id=Path(output_file).stem, status="completed",
+        counters=counters, started_at=started_at,
+        extra={"num_conversations": n_src,
+               "num_individual_evaluated": n_ind,
+               "num_group_evaluated": n_grp,
+               "judge": args.judge, "provider": args.provider,
+               "output_file": str(output_file)},
+    )
     logger.info(f"✓ Complete! Output: {output_file}")
 
 

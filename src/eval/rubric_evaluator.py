@@ -1,14 +1,25 @@
 """Rubric-based evaluation for individual and group agent responses."""
 
-import json
 import logging
-import traceback
 from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass, field
-import time
 from pydantic import BaseModel
 
 from src.const import EMPATHETIC_DATASET, QMSUM_DATASET
+from src.utils.text import extract_final_response
+from src.rubrics import (
+    INDIVIDUAL_RUBRIC as CANONICAL_INDIVIDUAL_RUBRIC,
+    GROUP_RUBRIC as CANONICAL_GROUP_RUBRIC,
+    validate_scores,
+)
+# Shared judge-call/parse infrastructure (Phase-2 Part E). The historical
+# names below stay importable from this module.
+from src.eval.base_rubric_evaluator import (
+    EvaluationResult,
+    build_rubric_text,
+    _generate_and_parse_with_retries,
+    _make_response_format,
+    _parse_judge_response,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -48,32 +59,6 @@ class GroupEvalResponse(BaseModel):
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class EvaluationResult:
-    """Container for evaluation results."""
-    scores: Dict[str, int]
-    total_reward: float
-    reasoning: str
-    id: Optional[str] = None
-    start_idx: Optional[int] = None
-    weighted_reward: Optional[float] = None
-    original_response: Optional[str] = None
-    cleaned_response: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            'id': self.id,
-            'start_idx': self.start_idx,
-            'scores': self.scores,
-            'total_reward': self.total_reward,
-            'reasoning': self.reasoning,
-            'weighted_reward': self.weighted_reward,
-            'original_response': self.original_response,
-            'cleaned_response': self.cleaned_response
-        }
-
-
 # ---------------------------------------------------------------------------
 # Rubric criteria blocks (single source of truth for judge-prompt criteria).
 # Each block is stored without its leading "N. " number so the numbered rubric
@@ -82,199 +67,16 @@ class EvaluationResult:
 # order reproduces the original prompts byte-identically.
 # ---------------------------------------------------------------------------
 
-def build_rubric_text(criteria: List[str], order: Optional[List[int]] = None, epilogue: str = "") -> str:
-    """Join criterion blocks in the given order, renumbering 1..N.
-
-    order=None reproduces the original rubric text byte-identically.
-    """
-    if order is None:
-        order = list(range(len(criteria)))
-    assert sorted(order) == list(range(len(criteria))), \
-        f"Invalid criteria order {order} for {len(criteria)} criteria"
-    return "\n" + "".join(f"{i + 1}. {criteria[idx]}" for i, idx in enumerate(order)) + epilogue
-
-def _make_response_format(name: str, response_model) -> dict:
-    """vLLM guided-JSON response_format for a pydantic response model."""
-    return {
-        'type': 'json_schema',
-        'json_schema': {
-            'name': name,
-            'strict': False,
-            'schema': response_model.model_json_schema()
-        }
-    }
-
-
-def _generate_and_parse_with_retries(evaluator, prompt, evaluation_data, orig, clean,
-                                     temperature, warn_label, fail_message,
-                                     sleep_seconds=0):
-    """Shared judge-call + parse retry loop for both rubric evaluators.
-
-    Log text, temperatures, and sleep behavior are parameterized to preserve
-    each evaluator's existing behavior exactly.
-    """
-    for _ in range(evaluator.num_retries):
-        try:
-            results = evaluator.judge_model.generate_batch(
-                prompts=[prompt], temperature=temperature, max_tokens=3000
-            )
-            return evaluator.parse_result(results[0], evaluation_data, orig, clean)
-        except Exception as e:
-            logger.warning(f"{warn_label}: {e}")
-            traceback.print_exc()
-            if sleep_seconds:
-                time.sleep(sleep_seconds)
-    raise RuntimeError(fail_message)
-
-
-def _parse_judge_response(response) -> Dict[str, Any]:
-    """Parse a judge response into a dict.
-
-    Accepts a dict (structured output already parsed by the caller — the
-    former VLLMServerModel ``parsed_json`` path, now made explicit in
-    llm_as_a_judge) or a raw string, which goes through the original rubric
-    string cascade unchanged.
-    """
-    if isinstance(response, dict):
-        return response
-
-    # Try to extract JSON from response
-    response = response.strip()
-
-    # Remove markdown code blocks if present
-    if response.startswith("```"):
-        lines = response.split("\n")
-        # Remove first and last lines (``` markers)
-        response = "\n".join(lines[1:-1]) if len(lines) > 2 else response
-        if response.startswith("json"):
-            response = response[4:].strip()
-
-    # Find JSON object
-    start_idx = response.find("{")
-    end_idx = response.rfind("}") + 1
-
-    if start_idx != -1 and end_idx > start_idx:
-        json_str = response[start_idx:end_idx]
-        return json.loads(json_str)
-    else:
-        raise ValueError(f"Could not find JSON in response: {response[:200]}")
-
-
-INDIVIDUAL_BATCH_CRITERIA = [
-"""Persona Consistency
-Definition: To what extent does the response align with the agent's predefined persona?
-Evaluation criteria: Does the response reflect the tone, vocabulary, values, and behavioral style specified in the agent's Persona Bio, without contradicting prior persona-consistent behavior?
-Scale anchor (BE EXTREMELY STRICT):
-1 = Completely out of character, sounds generic or contradicts persona
-2 = Barely recognizable persona, mostly generic 
-3 = Persona is detectable but uses standard coaching/therapy language, not truly distinctive
-4 = Vivid persona voice with NO generic phrases AND unique character-specific vocabulary
-5 = All words embody persona, impossible to confuse with any other agent
-
-
-
-""",
-"""Empathic Response Quality (Perceived Empathy)
-Definition: To what extent does the response demonstrate empathy?
-Evaluation criteria: (1) expressing appropriate emotional reactions, (2) accurately interpreting the user's feelings or experiences, and (3) encouraging reflection or continuation through specific, supportive questions?
-Scale anchor (BE EXTREMELY STRICT):
-1 = Dismissive, tone-deaf, emotionally inappropriate, misses user's emotional state entirely
-2 = Superficial acknowledgment only
-3 = Recognizes emotion with standard validation, asks predictable questions
-4 = Names SPECIFIC unfelt emotions, reframes situation, offers new insight
-5 = Profound psychological depth that reveals hidden emotional truth user didn't see
-
-
-""",
-"""Emotional Expressiveness
-Definition: To what extent is the emotional tone and intensity of the response appropriate?
-Evaluation criteria: Does the response express emotion at a level appropriate to both the agent's persona and the conversational context, avoiding emotional flatness or exaggeration?
-Scale anchor (BE EXTREMELY STRICT):
-1 = Completely flat or wildly inappropriate emotional tone (e.g., cheerful for grief)
-2 = Noticeably mismatched tone or weak emotional expression, feels robotic
-3 = Adequate match to situation but predictable emotional expression
-4 = Precisely tuned with subtle emotional nuance AND unique persona flavors
-5 = Emotional mastery that transcends typical AI responses, feels profoundly human
-
-""",
-"""Response Relevance & Coherence
-Definition: To what extent is the response logically connected to the conversation?
-Evaluation criteria: Is the response clear, coherent, and directly relevant to the immediately preceding conversational context (user or agent turns), without non sequiturs or contradictions?
-1 = Incoherent, contradictory, or completely off-topic
-2 = Weak connection to context, unclear, or addresses wrong aspect
-3 = Relevant and coherent, responds to surface content
-4 = Connects to UNSTATED implications, weaves in earlier context creatively
-5 = Perfect contextual integration with unexpected but logical connections
-
-
-Score 4 requires going beyond surface relevance to deeper connections.
-
-""",
-"""Social Contribution Quality
-Definition: To what extent does the response meaningfully advance the social interaction?
-Evaluation criteria: Does the response contribute new, relevant value to the interaction—such as offering perspective, reassurance, guidance, or connection to related ideas—rather than merely restating emotions or producing generic affirmations?
-Scale anchor (BE EXTREMELY STRICT):
-1 = Zero value added, purely generic platitudes or exact repetition from earlier
-2 = Minimal contribution, mostly restating user's words or filler phrases
-3 = Functional contribution through standard questions or affirmations
-4 = Introduces genuinely NEW angle user hasn't considered, non-obvious reframe
-5 = Transformative insight that fundamentally shifts user's understanding
-
-
-""",
-]
+# Judge-prompt criteria blocks are defined once in src/rubrics.py (paper_v1).
+# These aliases preserve the historical names; rendering stays byte-identical.
+INDIVIDUAL_BATCH_CRITERIA = [c.judge_block for c in CANONICAL_INDIVIDUAL_RUBRIC.criteria]
 
 # Universal closing line — never reordered with the criteria.
-INDIVIDUAL_BATCH_EPILOGUE = "Score 4-5 requires language so unique you could identify the specific agent blind.\n"
+INDIVIDUAL_BATCH_EPILOGUE = CANONICAL_INDIVIDUAL_RUBRIC.epilogue
 
+GROUP_CRITERIA = [c.judge_block for c in CANONICAL_GROUP_RUBRIC.criteria]
 
-GROUP_CRITERIA = [
-"""Persona Fidelity (Multi-Agent Voice Distinction)
-Definition: Can you identify each agent by their unique voice, approach, and therapeutic style?
-• 1 = Agents are indistinguishable - all sound like generic empathetic AI
-• 2 = Minimal differentiation - agents use similar phrases/tones/approaches
-• 3 = Basic personas detectable but use standard therapy language (DEFAULT)
-• 4 = Distinct voices - each agent has unique vocabulary and approach
-• 5 = Perfect embodiment - you could identify each agent blind, zero overlap (extremely rare)
-
-""",
-"""Originality & Specificity (Anti-Repetition)
-Definition: Does the collective conversation avoid repetition and bring fresh, specific insights?
-• 1 = Highly repetitive - agents repeat each other's phrases or validation
-• 2 = Mostly predictable - standard coaching questions dominate
-• 3 = Some variety but conventional approaches with noticeable repetition (DEFAULT)
-  - Example: 2+ agents say variations of "That sounds difficult" or "What do you think..."
-• 4 = Original perspectives - each agent adds genuinely NEW angle to user's situation
-  - Example: One validates emotion, one explores cause, one identifies strength - all distinct
-• 5 = Highly novel - zero generic language, each turn reveals new insight (extremely rare)
-
-""",
-"""Conversational Relevance & Coherence (Multi-Agent Flow)
-Definition: Do agents build on each other's contributions to create a cohesive conversation?
-• 1 = Incoherent - agents contradict each other or ignore previous responses
-• 2 = Weak flow - responses feel isolated, not responsive to each other
-• 3 = Basic coherence - agents stay on-topic but don't meaningfully connect (DEFAULT)
-  - Example: Each agent addresses user independently without referencing others
-• 4 = Good collaborative flow - agents acknowledge and build on previous points
-  - Example: "Building on what The Anchor said about guilt, I'm curious about..."
-• 5 = Seamless orchestration - conversation feels like one unified supportive dialogue (extremely rare)
-
-""",
-"""Engagement & Contribution Quality (Collective Value)
-Definition: Does the multi-agent conversation provide more value than a single agent could?
-• 1 = No multi-agent benefit - redundant or conflicting responses
-• 2 = Minimal collective value - agents add surface-level variations only
-• 3 = Functional multi-agent value - different angles but unremarkable depth (DEFAULT)
-  - Example: Three agents validate the same emotion using different words
-• 4 = Strong multi-agent synergy - diverse, complementary contributions
-  - Example: Validation + cognitive reframe + strength identification = holistic support
-• 5 = Exceptional orchestration - collective intelligence exceeds sum of parts (extremely rare)
-
-""",
-]
-
-GROUP_EPILOGUE = """**Key Insight**: Score 3 means "this is what you'd expect from a functional multi-agent system" - not impressive, just adequate. Scores 4-5 require genuine excellence in multi-agent coordination.
-"""
+GROUP_EPILOGUE = CANONICAL_GROUP_RUBRIC.epilogue
 
 
 class IndividualRubricEvaluator:
@@ -559,6 +361,7 @@ IMPORTANT: Return ONLY the JSON object, no additional text before or after."""
 
         # Parse JSON response
         eval_data = self._parse_response(results[0])
+        validate_scores(eval_data["scores"], CANONICAL_INDIVIDUAL_RUBRIC, strict=True)
 
         # Calculate weighted reward if weights are provided
         weighted_reward = sum(
@@ -627,8 +430,8 @@ IMPORTANT: Return ONLY the JSON object, no additional text before or after."""
         for idx, data in enumerate(evaluation_data):
             agent_response = data['agent_response']
             original_responses.append(agent_response)
-            if '</think>' in agent_response:
-                agent_response = agent_response.split('</think>', 1)[-1].strip()
+            agent_response = extract_final_response(agent_response,
+                                                    strip_without_tag=False)
             cleaned_responses.append(agent_response)
             if data.get('turn_type', None) == 'user':
                 item = f"[User]: {agent_response}"
@@ -716,6 +519,7 @@ Provide your evaluation in the following JSON format. Do not include any other t
         results = []
         for i, resp_eval in enumerate(response_list):
             assert "scores" in resp_eval and isinstance(resp_eval["scores"], dict), "Scores must be a dict"
+            validate_scores(resp_eval["scores"], CANONICAL_INDIVIDUAL_RUBRIC, strict=True)
             resp_eval["scores"] = {k: float(v) for k, v in resp_eval["scores"].items()}
             assert all(1 <= score <= 5 for score in resp_eval["scores"].values()), \
                 "Scores must be between 1 and 5"
@@ -915,6 +719,7 @@ IMPORTANT: Return ONLY the JSON object, no additional text before or after."""
 
         # Parse JSON response
         eval_data = self._parse_response(results[0])
+        validate_scores(eval_data["scores"], CANONICAL_GROUP_RUBRIC, strict=True)
 
         # Calculate weighted reward
         weighted_reward = sum(
@@ -971,10 +776,8 @@ IMPORTANT: Return ONLY the JSON object, no additional text before or after."""
         original_responses, cleaned_responses = [], []
         for turn in evaluation_data['turns']:
             original_responses.append(turn['response'])
-            if '</think>' in turn['response']:
-                response = turn['response'].split('</think>', 1)[-1].strip()
-            else:
-                response = turn['response']
+            response = extract_final_response(turn['response'],
+                                              strip_without_tag=False)
             cleaned_responses.append(response)
             if turn.get('turn_type', None) == "user":
                 batch_items.append(f"[User]: {response[:512]}\n")
@@ -1122,6 +925,7 @@ Before scoring, verify:
 
         results = []
         for i, resp_eval in enumerate(response_list):
+            validate_scores(resp_eval["scores"], CANONICAL_GROUP_RUBRIC, strict=True)
             weighted_reward = sum(
                 resp_eval["scores"].get(dim, 0) * self.weights.get(dim, 0)
                 for dim in self.weights.keys()

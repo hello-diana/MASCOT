@@ -1,43 +1,16 @@
 from config.persona_config import PersonaSpec
-from src.const import EMPATHETIC_DATASET, QMSUM_DATASET
+from src.const import EMPATHETIC_DATASET, ESCONV_DATASET, QMSUM_DATASET
+from src.rubrics import INDIVIDUAL_RUBRIC_LEGACY, GROUP_RUBRIC_LEGACY, format_rubric
+from src.utils.text import extract_final_response
 from typing import Dict
 import random
 
-CRITERIA_CC = """
-1. Relevance: How well does the response relate to the current context?
-2. Authenticity: Does the response sound natural and authentic for this persona?
-3. Engagement: Is the response engaging and interesting?
-4. Diversity: Does the response bring a unique perspective consistent with the persona?
-5. Timing: Is the response appropriate for this moment in the meeting?
-"""
+# Legacy (v0) reward-prompt criteria. The canonical definitions now live in
+# src/rubrics.py; these aliases render byte-identically to the strings that
+# existing reward-model checkpoints were trained with (snapshot-tested).
+CRITERIA = format_rubric(INDIVIDUAL_RUBRIC_LEGACY, "reward_prompt")
 
-RESPONSE_FORMAT_CC = """
-{
-    "relevance": ..., (integer between 1 and 5)
-    "authenticity": ..., (integer between 1 and 5)
-    "engagement": ..., (integer between 1 and 5)
-    "diversity": ..., (integer between 1 and 5)
-    "timing": ..., (integer between 1 and 5)
-    "justification": ..., (1-2 sentence explanation)
-}
-"""
-
-CRITERIA = """
-* Accuracy: Responses are correct, grounded in given context. The agent should state uncertainty when needed (no hallucinations).
-* Role Fidelity: Stays consistently in-character and follows the assigned role description. Matches the persona's tone, formality, and emotion for the situation.
-* Context Relevance: Directly addresses the user's latest request and advances the ongoing conversation goal.
-* Logical Consistency: Maintains coherent claims and decisions across turns with no contradictions.
-* Helpfulness: Provides concrete, actionable content instead of vague or generic filler.
-* Engagement: Keeps the dialogue productive via appropriate follow-up questions or next-step suggestions.
-* Safety: Avoids harmful content and respects constraints, refusals, and role-appropriate limits.
-"""
-
-CRITERIA_COLLECTIVE = """
-1. Persona Fidelity: Can you identify each agent by their unique voice, approach, and therapeutic style?
-2. Originality & Specificity: Does the collective conversation avoid repetition and bring fresh, specific insights?
-3. Conversational Relevance & Coherence: Do agents build on each other's contributions to create a cohesive conversation?
-4. Engagement & Contribution Quality: Does the multi-agent conversation provide more value than a single agent could?
-"""
+CRITERIA_COLLECTIVE = format_rubric(GROUP_RUBRIC_LEGACY, "reward_prompt")
 
 RESPONSE_FORMAT = """
 {
@@ -134,7 +107,7 @@ TARGET PERSONA:
 
 RESPONSE TO EVALUATE:
 ```
-{response.split('</think>')[-1].strip()}
+{extract_final_response(response, take_last_tag=True)}
 ```
 
 Evaluate this response on the following dimensions:
@@ -167,7 +140,8 @@ class MascotPersonaTemplates(PersonaTemplates):
     def speaker_prompt(dataset_name: str, persona: PersonaSpec, context: str, meeting_summary: str, conversation_history: str = "") -> str:
         if dataset_name == QMSUM_DATASET:
             return MascotPersonaTemplates.speaker_prompt_qmsum(persona, context, meeting_summary, conversation_history)
-        elif dataset_name == EMPATHETIC_DATASET:
+        elif dataset_name in (EMPATHETIC_DATASET, ESCONV_DATASET):
+            # ESConv reuses the empathetic personas/templates.
             return MascotPersonaTemplates.speaker_prompt_empathetic(persona, context, conversation_history)
         else:
             raise ValueError(f"Invalid dataset name: {dataset_name}")
@@ -317,11 +291,24 @@ Given the human user's emotional context and any prior agent responses, provide 
         return description
     
     @staticmethod
-    def directive_prompt(dataset_name: str, agents: Dict, meeting_context: str, conversation_history: str = "", agents_spoken: dict = None) -> str:
+    def directive_prompt(dataset_name: str, agents: Dict, meeting_context: str,
+                         conversation_history: str = "", agents_spoken: dict = None,
+                         emotion: str = "neutral") -> str:
+        """Dataset-dispatched directive prompt.
+
+        For empathetic/ESConv, ``meeting_context`` is the user's situation and
+        ``emotion`` the current emotional state (callers without emotional-state
+        tracking pass the "neutral" default).
+        """
         if dataset_name == QMSUM_DATASET:
             return MascotPersonaTemplates.directive_prompt_qmsum(agents, meeting_context, conversation_history, agents_spoken)
-        elif dataset_name == EMPATHETIC_DATASET:
-            return MascotPersonaTemplates.directive_prompt_empathetic(agents, meeting_context, conversation_history, agents_spoken)
+        elif dataset_name in (EMPATHETIC_DATASET, ESCONV_DATASET):
+            # ESConv reuses the empathetic personas/templates. NOTE: the
+            # previous dispatcher passed conversation_history into the
+            # ``emotion`` positional slot — fixed to keyword args.
+            return MascotPersonaTemplates.directive_prompt_empathetic(
+                agents, situation=meeting_context, emotion=emotion,
+                conversation_history=conversation_history, agents_spoken=agents_spoken)
         else:
             raise ValueError(f"Invalid dataset name: {dataset_name}")
     
